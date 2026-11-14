@@ -30,3 +30,36 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #B8B4AC;
 }
+
+/* Print Friendly Stylesheet */
+@media print {
+  @page {
+    margin: 1.5cm;
+    size: auto;
+  }
+
+  body {
+    background-color: #FFFFFF !important;
+    color: #000000 !important;
+    font-size: 11pt;
+  }
+
+  header,
+  aside,
+  button,
+  input,
+  .print\:hidden {
+    display: none !important;
+  }
+
+  section {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    margin-bottom: 1.5rem !important;
+  }
+
+  a {
+    text-decoration: none !important;
+    color: inherit !important;
+  }
+}

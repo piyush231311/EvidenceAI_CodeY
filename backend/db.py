@@ -62,6 +62,23 @@ def init_db():
                     if col_name not in cols_q:
                         conn.execute(text(f"ALTER TABLE clarification_questions ADD COLUMN {col_name} {col_type}"))
 
+                # Auto-migrate evidence table
+                res_ev = conn.execute(text("PRAGMA table_info(evidence)"))
+                cols_ev = [row[1] for row in res_ev.fetchall()]
+                ev_migrations = [
+                    ("extracted_text", "TEXT"),
+                    ("extraction_confidence", "FLOAT"),
+                    ("extraction_metadata", "TEXT"),
+                    ("processing_time_ms", "FLOAT"),
+                ]
+                for col_name, col_type in ev_migrations:
+                    if col_name not in cols_ev:
+                        conn.execute(text(f"ALTER TABLE evidence ADD COLUMN {col_name} {col_type}"))
+                conn.commit()
+                for col_name, col_type in q_migrations:
+                    if col_name not in cols_q:
+                        conn.execute(text(f"ALTER TABLE clarification_questions ADD COLUMN {col_name} {col_type}"))
+
                 conn.commit()
         except Exception:
             pass
