@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Node / Frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+dist/
+.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Evidence file storage (exclude uploaded originals for victim privacy)
+storage/originals/*
+!storage/originals/.gitkeep
+
+# Temporary test artifacts
+test_files/
+
+# OS / Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

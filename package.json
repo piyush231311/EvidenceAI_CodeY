@@ -1,0 +1,11 @@
+{
+  "name": "evidence-ai",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Victim-first digital evidence intake and forensic preservation platform",
+  "scripts": {
+    "dev": "npm --prefix frontend run dev",
+    "build": "npm --prefix frontend run build",
+    "install:frontend": "npm --prefix frontend install"
+  }
+}
