@@ -1,185 +1,111 @@
 import React, { useState } from 'react';
-import { 
-  Settings as SettingsIcon, 
-  Moon, 
-  Sun, 
-  RotateCcw, 
-  Info, 
-  Layers, 
-  CheckCircle2, 
-  Zap,
-  Sparkles
-} from 'lucide-react';
+import { Shield, HardDrive, CheckCircle2 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { Button } from '../components/common/Button';
 import { ConfirmDialog } from '../components/common/ConfirmDialog';
 
 export const Settings: React.FC = () => {
-  const { settings, updateSettings, resetDemoWorkspace } = useApp();
-  const [isResetConfirmOpen, setIsResetConfirmOpen] = useState<boolean>(false);
-  const [resetSuccessMessage, setResetSuccessMessage] = useState<string>('');
+  const { cases, evidence, deleteCase } = useApp();
+  const [isClearOpen, setIsClearOpen] = useState<boolean>(false);
+  const [clearMessage, setClearMessage] = useState<string>('');
 
-  const handleReset = () => {
-    resetDemoWorkspace();
-    setIsResetConfirmOpen(false);
-    setResetSuccessMessage('Workspace reset to initial clean demo data.');
-    setTimeout(() => setResetSuccessMessage(''), 3500);
+  const handleClearAll = async () => {
+    // Delete all cases sequentially
+    for (const c of cases) {
+      await deleteCase(c.id);
+    }
+    setIsClearOpen(false);
+    setClearMessage('All cases and evidence records have been cleared from local database.');
+    setTimeout(() => setClearMessage(''), 4000);
   };
 
   return (
-    <div className="space-y-6 max-w-4xl mx-auto animate-fadeIn">
-      {/* Header */}
-      <div className="pb-4 border-b border-slate-800">
-        <h1 className="text-2xl font-bold text-white tracking-tight flex items-center gap-2.5">
-          <SettingsIcon className="w-6 h-6 text-slate-400" />
-          Settings & Workspace Preferences
-        </h1>
-        <p className="text-xs text-slate-400 mt-1">
-          Customize display density, theme, motion preferences, and manage demo prototype state.
+    <div className="space-y-6 max-w-xl">
+      <div className="pb-3 border-b border-[#E6E4DF]">
+        <h1 className="text-lg font-semibold text-[#1C1917]">Settings</h1>
+        <p className="text-xs text-[#6B6862] mt-0.5">
+          Local storage and system details.
         </p>
       </div>
 
-      {resetSuccessMessage && (
-        <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs flex items-center gap-2">
-          <CheckCircle2 className="w-4 h-4 shrink-0" />
-          <span>{resetSuccessMessage}</span>
+      {clearMessage && (
+        <div className="p-3 bg-emerald-50 border border-emerald-200 rounded text-xs text-emerald-900 flex items-center gap-2">
+          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+          <span>{clearMessage}</span>
         </div>
       )}
 
-      {/* Preferences Section */}
-      <div className="bg-[#162032] border border-slate-800 rounded-2xl p-6 space-y-6">
-        <h3 className="text-sm font-semibold text-white border-b border-slate-800 pb-3">
-          Display & Interaction Preferences
+      {/* Storage and Privacy info */}
+      <div className="bg-white border border-[#E6E4DF] rounded-md p-5 space-y-4">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-[#6B6862]">
+          Data storage & privacy
         </h3>
 
-        {/* Theme Preference */}
-        <div className="flex items-center justify-between">
-          <div>
-            <span className="text-xs font-semibold text-white block">Interface Color Theme</span>
-            <span className="text-[11px] text-slate-400">
-              Default is calibrated for high-contrast, low-eyestrain dark navy (#0B1120).
+        <div className="space-y-3 text-xs">
+          <div className="flex justify-between py-1.5 border-b border-[#F0EFEB]">
+            <span className="text-[#6B6862]">Storage mode</span>
+            <span className="font-medium text-[#1C1917]">Local only (SQLite database)</span>
+          </div>
+
+          <div className="flex justify-between py-1.5 border-b border-[#F0EFEB]">
+            <span className="text-[#6B6862]">File storage path</span>
+            <code className="text-[#1C1917] bg-[#F5F5F0] px-1 py-0.5 rounded font-mono text-[11px]">
+              ./storage/originals/
+            </code>
+          </div>
+
+          <div className="flex justify-between py-1.5 border-b border-[#F0EFEB]">
+            <span className="text-[#6B6862]">Database file</span>
+            <code className="text-[#1C1917] bg-[#F5F5F0] px-1 py-0.5 rounded font-mono text-[11px]">
+              evidence_ai.db
+            </code>
+          </div>
+
+          <div className="flex justify-between py-1.5">
+            <span className="text-[#6B6862]">Database records</span>
+            <span className="font-mono text-[#1C1917]">
+              {cases.length} case{cases.length === 1 ? '' : 's'} • {evidence.length} file{evidence.length === 1 ? '' : 's'}
             </span>
           </div>
-
-          <div className="flex items-center gap-2 bg-[#0F172A] border border-slate-700 rounded-xl p-1">
-            <button
-              onClick={() => updateSettings({ theme: 'dark' })}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                settings.theme === 'dark' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Moon className="w-3.5 h-3.5" /> Dark Navy
-            </button>
-            <button
-              onClick={() => updateSettings({ theme: 'light' })}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                settings.theme === 'light' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Sun className="w-3.5 h-3.5" /> Light
-            </button>
-          </div>
         </div>
 
-        {/* Layout Density */}
-        <div className="flex items-center justify-between pt-4 border-t border-slate-800">
-          <div>
-            <span className="text-xs font-semibold text-white block">Layout Density</span>
-            <span className="text-[11px] text-slate-400">
-              Controls padding and compactness across evidence cards and tables.
-            </span>
-          </div>
-
-          <div className="flex items-center gap-2 bg-[#0F172A] border border-slate-700 rounded-xl p-1">
-            <button
-              onClick={() => updateSettings({ density: 'comfortable' })}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                settings.density === 'comfortable' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              Comfortable
-            </button>
-            <button
-              onClick={() => updateSettings({ density: 'compact' })}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                settings.density === 'compact' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              Compact
-            </button>
-          </div>
-        </div>
-
-        {/* Reduced Motion Toggle */}
-        <div className="flex items-center justify-between pt-4 border-t border-slate-800">
-          <div>
-            <span className="text-xs font-semibold text-white block">Reduced Motion</span>
-            <span className="text-[11px] text-slate-400">
-              Disable animated transitions for lower system utilization.
-            </span>
-          </div>
-
-          <button
-            onClick={() => updateSettings({ reducedMotion: !settings.reducedMotion })}
-            className={`w-11 h-6 flex items-center rounded-full p-1 transition-colors ${
-              settings.reducedMotion ? 'bg-blue-600' : 'bg-slate-700'
-            }`}
-          >
-            <div
-              className={`bg-white w-4 h-4 rounded-full shadow-md transform transition-transform ${
-                settings.reducedMotion ? 'translate-x-5' : 'translate-x-0'
-              }`}
-            />
-          </button>
-        </div>
-      </div>
-
-      {/* Demo Prototype Workspace Controls */}
-      <div className="bg-[#162032] border border-slate-800 rounded-2xl p-6 space-y-4">
-        <h3 className="text-sm font-semibold text-white border-b border-slate-800 pb-3">
-          Prototype Workspace Data Management
-        </h3>
-
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div>
-            <span className="text-xs font-semibold text-white block">Reset Demonstration Workspace</span>
-            <p className="text-[11px] text-slate-400 max-w-lg mt-0.5 leading-relaxed">
-              Restore the initial 3 sample cases (Harassment, Financial Fraud, IP Theft) and 13 fictional evidence files. Newly created custom files will be cleared.
-            </p>
-          </div>
-
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setIsResetConfirmOpen(true)}
-            className="shrink-0 text-slate-300 hover:text-white"
-          >
-            <RotateCcw className="w-3.5 h-3.5 text-cyan-400" />
-            <span>Reset Demo Workspace</span>
-          </Button>
-        </div>
-      </div>
-
-      {/* Application Version & Metadata */}
-      <div className="p-5 rounded-2xl bg-[#0F172A] border border-slate-800 text-xs text-slate-400 space-y-2">
-        <div className="flex items-center justify-between">
-          <span className="font-semibold text-white">Evidence AI — Frontend Client</span>
-          <span className="font-mono text-[11px] text-cyan-400">v2.0.0-hackathon</span>
-        </div>
-        <p className="text-[11px] leading-relaxed">
-          Clean frontend-only build. Architecture is pre-wired with service abstractions (<code>caseService</code>, <code>evidenceService</code>) ready for FastAPI and local AI pipeline integrations.
+        <p className="text-xs text-[#6B6862] leading-relaxed pt-2">
+          Your files and forensic records never leave this machine. SHA-256 cryptographic fingerprints are computed directly from raw bytes.
         </p>
       </div>
 
-      {/* Reset Confirmation Dialog */}
+      {/* Clear Database */}
+      <div className="bg-white border border-[#E6E4DF] rounded-md p-5 flex items-center justify-between gap-4">
+        <div>
+          <h4 className="text-xs font-semibold text-[#1C1917]">Clear all local cases</h4>
+          <p className="text-xs text-[#6B6862] mt-0.5">
+            Permanently delete all cases and evidence records from the local database.
+          </p>
+        </div>
+
+        <Button
+          variant="danger"
+          size="sm"
+          onClick={() => setIsClearOpen(true)}
+          disabled={cases.length === 0}
+        >
+          Clear database
+        </Button>
+      </div>
+
+      {/* App Version */}
+      <div className="text-[11px] text-[#9C9890]">
+        Evidence AI • Version 1.0.0
+      </div>
+
+      {/* Confirm Clear Dialog */}
       <ConfirmDialog
-        isOpen={isResetConfirmOpen}
-        onClose={() => setIsResetConfirmOpen(false)}
-        onConfirm={handleReset}
-        title="Reset Demo Workspace?"
-        message="This will reset all cases, notes, and evidence to the original fictional demonstration dataset."
-        confirmLabel="Reset Workspace"
-        isDestructive={false}
+        isOpen={isClearOpen}
+        onClose={() => setIsClearOpen(false)}
+        onConfirm={handleClearAll}
+        title="Clear all local data?"
+        message="This will delete every case and all stored evidence files from the local database. This cannot be undone."
+        confirmLabel="Clear all data"
       />
     </div>
   );

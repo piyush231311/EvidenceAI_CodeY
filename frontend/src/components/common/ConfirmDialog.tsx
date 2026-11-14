@@ -1,7 +1,6 @@
 import React from 'react';
 import { Modal } from './Modal';
 import { Button } from './Button';
-import { AlertTriangle } from 'lucide-react';
 
 interface ConfirmDialogProps {
   isOpen: boolean;
@@ -10,7 +9,6 @@ interface ConfirmDialogProps {
   title: string;
   message: string;
   confirmLabel?: string;
-  isDestructive?: boolean;
   isLoading?: boolean;
 }
 
@@ -21,30 +19,23 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   title,
   message,
   confirmLabel = 'Delete',
-  isDestructive = true,
   isLoading = false,
 }) => {
   return (
-    <Modal isOpen={isOpen} onClose={onClose} maxWidth="sm">
-      <div className="flex flex-col items-center text-center p-2">
-        <div className="w-12 h-12 rounded-full bg-rose-500/10 border border-rose-500/20 text-rose-400 flex items-center justify-center mb-4">
-          <AlertTriangle className="w-6 h-6" />
-        </div>
-        <h3 className="text-base font-semibold text-white mb-2">{title}</h3>
-        <p className="text-xs text-slate-400 mb-6 leading-relaxed">{message}</p>
-        <div className="flex items-center gap-3 w-full">
-          <Button variant="outline" className="flex-1" onClick={onClose} disabled={isLoading}>
-            Cancel
-          </Button>
-          <Button
-            variant={isDestructive ? 'danger' : 'primary'}
-            className="flex-1"
-            onClick={onConfirm}
-            isLoading={isLoading}
-          >
-            {confirmLabel}
-          </Button>
-        </div>
+    <Modal isOpen={isOpen} onClose={onClose} maxWidth="sm" title={title}>
+      <p className="text-xs text-[#6B6862] mb-5 leading-relaxed">{message}</p>
+      <div className="flex items-center justify-end gap-2">
+        <Button variant="secondary" size="sm" onClick={onClose} disabled={isLoading}>
+          Cancel
+        </Button>
+        <Button
+          variant="danger"
+          size="sm"
+          onClick={onConfirm}
+          isLoading={isLoading}
+        >
+          {confirmLabel}
+        </Button>
       </div>
     </Modal>
   );

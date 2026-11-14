@@ -1,435 +1,301 @@
-import React, { useState, useCallback } from 'react';
-import { useDropzone } from 'react-dropzone';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { 
-  UploadCloud, 
-  Image as ImageIcon, 
-  Mic, 
-  FileText, 
-  FileCode, 
-  X, 
-  CheckCircle2, 
-  AlertCircle, 
-  Briefcase, 
-  Check, 
-  Layers, 
-  FileCheck,
-  ShieldCheck
-} from 'lucide-react';
+import { useDropzone } from 'react-dropzone';
+import { Upload, X, Check, AlertCircle } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { EvidenceType, StagedUploadItem } from '../types';
 import { Button } from '../components/common/Button';
-import { EvidenceTypeBadge } from '../components/common/Badge';
 
-const ALLOWED_EXTENSIONS: Record<string, EvidenceType> = {
-  // Images
-  png: 'image',
-  jpg: 'image',
-  jpeg: 'image',
-  webp: 'image',
-  // Audio
-  mp3: 'audio',
-  wav: 'audio',
-  m4a: 'audio',
-  ogg: 'audio',
-  // Text / Logs
-  txt: 'text',
-  csv: 'text',
-  json: 'text',
-  eml: 'text',
-  // Documents
-  pdf: 'document',
-  docx: 'document'
-};
+const ALLOWED_EXTENSIONS = new Set([
+  'png', 'jpg', 'jpeg', 'webp',
+  'mp3', 'wav', 'm4a', 'ogg',
+  'txt', 'json', 'csv', 'eml', 'pdf'
+]);
 
 const MAX_SIZE_BYTES = 50 * 1024 * 1024; // 50MB
 
-// Browser-native SHA-256 calculation
-async function computeBrowserSha256(file: File): Promise<string> {
-  const arrayBuffer = await file.arrayBuffer();
-  const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+interface StagedFile {
+  id: string;
+  file: File;
+  notes: string;
 }
 
 export const UploadEvidence: React.FC = () => {
   const navigate = useNavigate();
-  const { cases, activeCaseId, addEvidenceItem } = useApp();
+  const { cases, activeCaseId, uploadEvidence } = useApp();
 
-  const [selectedCaseId, setSelectedCaseId] = useState<string>(activeCaseId || (cases[0]?.id || ''));
-  const [stagedFiles, setStagedFiles] = useState<StagedUploadItem[]>([]);
-  const [isProcessing, setIsProcessing] = useState<boolean>(false);
-  const [generalError, setGeneralError] = useState<string>('');
-  const [completedCount, setCompletedCount] = useState<number>(0);
+  const [selectedCaseId, setSelectedCaseId] = useState<string>(
+    activeCaseId || (cases.length > 0 ? cases[0].id : '')
+  );
+  const [newCaseIdInput, setNewCaseIdInput] = useState<string>('');
+  const [isCreatingNewCase, setIsCreatingNewCase] = useState<boolean>(cases.length === 0);
+
+  const [stagedFiles, setStagedFiles] = useState<StagedFile[]>([]);
+  const [errorMessage, setErrorMessage] = useState<string>('');
+  const [isUploading, setIsUploading] = useState<boolean>(false);
+  const [uploadSuccessCaseId, setUploadSuccessCaseId] = useState<string | null>(null);
 
   const formatBytes = (bytes: number) => {
     if (bytes === 0) return '0 B';
     const k = 1024;
     const sizes = ['B', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
   };
 
-  const onDrop = useCallback((acceptedFiles: File[]) => {
-    setGeneralError('');
-    const newItems: StagedUploadItem[] = [];
+  const onDrop = (acceptedFiles: File[]) => {
+    setErrorMessage('');
+    const newStaged: StagedFile[] = [];
 
     acceptedFiles.forEach((file) => {
       const ext = file.name.split('.').pop()?.toLowerCase() || '';
-      const category = ALLOWED_EXTENSIONS[ext];
 
-      if (!category) {
-        setGeneralError(`File "${file.name}" has unsupported format .${ext}`);
+      if (!ALLOWED_EXTENSIONS.has(ext)) {
+        setErrorMessage(`File "${file.name}" has an unsupported format (.${ext}).`);
         return;
       }
 
       if (file.size > MAX_SIZE_BYTES) {
-        setGeneralError(`File "${file.name}" exceeds 50 MB limit (${formatBytes(file.size)})`);
+        setErrorMessage(`File "${file.name}" exceeds the 50 MB limit (${formatBytes(file.size)}).`);
         return;
       }
 
-      const previewUrl = category === 'image' ? URL.createObjectURL(file) : undefined;
-
-      newItems.push({
-        id: `upload-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+      newStaged.push({
+        id: `${file.name}-${Date.now()}-${Math.random()}`,
         file,
-        caseId: selectedCaseId,
-        fileType: category,
-        displayName: file.name.replace(/\.[^/.]+$/, ''),
-        notes: '',
-        progress: 0,
-        status: 'queued',
-        previewUrl
+        notes: ''
       });
     });
 
-    if (newItems.length > 0) {
-      setStagedFiles((prev) => [...prev, ...newItems]);
+    if (newStaged.length > 0) {
+      setStagedFiles((prev) => [...prev, ...newStaged]);
     }
-  }, [selectedCaseId]);
+  };
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
-    multiple: true,
+    multiple: true
   });
 
   const handleRemoveStaged = (id: string) => {
-    setStagedFiles((prev) => {
-      const item = prev.find((x) => x.id === id);
-      if (item?.previewUrl) URL.revokeObjectURL(item.previewUrl);
-      return prev.filter((x) => x.id !== id);
-    });
+    setStagedFiles((prev) => prev.filter((f) => f.id !== id));
   };
 
-  const handleDisplayNameChange = (id: string, name: string) => {
+  const handleNoteChange = (id: string, notes: string) => {
     setStagedFiles((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, displayName: name } : item))
+      prev.map((f) => (f.id === id ? { ...f, notes } : f))
     );
   };
 
-  const handleNotesChange = (id: string, notes: string) => {
-    setStagedFiles((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, notes } : item))
-    );
-  };
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (stagedFiles.length === 0) return;
 
-  // Commit and ingest files locally
-  const handleCommitUploads = async () => {
-    if (stagedFiles.length === 0 || !selectedCaseId) return;
-
-    setIsProcessing(true);
-    setGeneralError('');
-    let successCounter = 0;
-
-    for (const item of stagedFiles) {
-      if (item.status === 'completed') continue;
-
-      // Update item progress
-      setStagedFiles((prev) =>
-        prev.map((f) => (f.id === item.id ? { ...f, status: 'validating', progress: 30 } : f))
-      );
-
-      try {
-        // Real browser-side cryptographic hashing
-        const sha256Hash = await computeBrowserSha256(item.file);
-
-        setStagedFiles((prev) =>
-          prev.map((f) => (f.id === item.id ? { ...f, status: 'uploading', progress: 75 } : f))
-        );
-
-        // Read text content if applicable
-        let textContent: string | undefined = undefined;
-        if (item.fileType === 'text') {
-          textContent = await item.file.text();
-        }
-
-        // Add to local app state vault
-        const ext = item.file.name.split('.').pop()?.toLowerCase() || '';
-        await addEvidenceItem({
-          caseId: selectedCaseId,
-          fileName: item.file.name,
-          displayName: item.displayName || item.file.name,
-          fileType: item.fileType,
-          fileExtension: ext,
-          fileSize: item.file.size,
-          notes: item.notes,
-          previewUrl: item.previewUrl,
-          fileObject: item.file,
-          textContent,
-          metadata: {
-            sha256: sha256Hash,
-            mimeType: item.file.type || 'application/octet-stream',
-            authenticityStatus: 'Verified',
-            authorOrSource: 'Browser Local File Intake'
-          }
-        });
-
-        setStagedFiles((prev) =>
-          prev.map((f) => (f.id === item.id ? { ...f, status: 'completed', progress: 100 } : f))
-        );
-        successCounter++;
-      } catch (err: any) {
-        setStagedFiles((prev) =>
-          prev.map((f) =>
-            f.id === item.id ? { ...f, status: 'error', progress: 100, errorMessage: err.message || 'Intake failed' } : f
-          )
-        );
-      }
+    let targetCase = selectedCaseId.trim();
+    if (isCreatingNewCase) {
+      targetCase = newCaseIdInput.trim() || crypto.randomUUID();
     }
 
-    setCompletedCount(successCounter);
-    setIsProcessing(false);
+    if (!targetCase) {
+      setErrorMessage('Please select or specify a case for this evidence.');
+      return;
+    }
+
+    setIsUploading(true);
+    setErrorMessage('');
+
+    try {
+      const notesMap: Record<string, string> = {};
+      stagedFiles.forEach((item) => {
+        if (item.notes.trim()) {
+          notesMap[item.file.name] = item.notes.trim();
+        }
+      });
+
+      const files = stagedFiles.map((s) => s.file);
+      await uploadEvidence(targetCase, files, notesMap);
+
+      setStagedFiles([]);
+      setUploadSuccessCaseId(targetCase);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'An error occurred during upload.');
+    } finally {
+      setIsUploading(false);
+    }
   };
 
-  const queuedCount = stagedFiles.filter((f) => f.status === 'queued').length;
-  const targetCase = cases.find((c) => c.id === selectedCaseId);
-
   return (
-    <div className="space-y-6 max-w-4xl mx-auto animate-fadeIn">
+    <div className="space-y-6 max-w-2xl">
       {/* Header */}
-      <div className="pb-4 border-b border-slate-800">
-        <h1 className="text-2xl font-bold text-white tracking-tight flex items-center gap-2.5">
-          <UploadCloud className="w-6 h-6 text-cyan-400" />
-          Evidence Intake & Upload
-        </h1>
-        <p className="text-xs text-slate-400 mt-1">
-          Select or drag sensitive files to compute cryptographic SHA-256 hashes and preserve chain of custody.
+      <div className="pb-3 border-b border-[#E6E4DF]">
+        <h1 className="text-lg font-semibold text-[#1C1917]">Add evidence</h1>
+        <p className="text-xs text-[#6B6862] mt-0.5">
+          Your files stay on this device. Nothing is sent anywhere.
         </p>
       </div>
 
-      {/* Case Selector Banner */}
-      <div className="bg-[#162032] border border-slate-800 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400 flex items-center justify-center shrink-0">
-            <Briefcase className="w-5 h-5" />
-          </div>
-          <div>
-            <label className="text-xs font-semibold text-white block">Destination Investigation Case</label>
-            <span className="text-[11px] text-slate-400">All uploaded evidence will be grouped under this case.</span>
-          </div>
-        </div>
-
-        <select
-          value={selectedCaseId}
-          onChange={(e) => setSelectedCaseId(e.target.value)}
-          className="bg-[#0F172A] border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-slate-200 font-medium focus:outline-none focus:border-blue-500 cursor-pointer min-w-[260px]"
-        >
-          {cases.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.id} — {c.title}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {generalError && (
-        <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs flex items-center gap-2">
-          <AlertCircle className="w-4 h-4 shrink-0" />
-          <span>{generalError}</span>
+      {uploadSuccessCaseId && (
+        <div className="p-4 bg-emerald-50 border border-emerald-200 rounded text-xs text-emerald-900 flex items-center justify-between">
+          <span>Files saved and fingerprinted under case [{uploadSuccessCaseId}].</span>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => navigate(`/cases/${uploadSuccessCaseId}`)}
+          >
+            View case
+          </Button>
         </div>
       )}
 
-      {/* Drag & Drop Zone */}
-      <div
-        {...getRootProps()}
-        className={`border-2 border-dashed rounded-2xl p-10 text-center transition-all cursor-pointer ${
-          isDragActive
-            ? 'border-cyan-400 bg-cyan-500/5 shadow-glow-cyan'
-            : 'border-slate-700/80 bg-[#162032]/50 hover:border-slate-600 hover:bg-[#162032]'
-        }`}
-      >
-        <input {...getInputProps()} />
-        <div className="max-w-md mx-auto space-y-3">
-          <div className="w-14 h-14 rounded-2xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 flex items-center justify-center mx-auto shadow-sm">
-            <UploadCloud className="w-7 h-7" />
-          </div>
-          <div>
-            <h3 className="text-base font-semibold text-white">
-              {isDragActive ? 'Drop files here to stage' : 'Drag & drop evidence files here'}
-            </h3>
-            <p className="text-xs text-slate-400 mt-1">
-              or <span className="text-cyan-400 font-semibold underline">browse from your computer</span>
-            </p>
-          </div>
-          <div className="flex flex-wrap justify-center gap-1.5 text-[11px] font-mono text-slate-400 pt-2">
-            <span className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-purple-400">PNG, JPG, WEBP</span>
-            <span className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-cyan-400">MP3, WAV, M4A</span>
-            <span className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-amber-400">TXT, JSON, CSV, EML</span>
-            <span className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-blue-400">PDF, DOCX</span>
-          </div>
-          <p className="text-[11px] text-slate-400">Maximum file size: 50 MB per file</p>
+      {errorMessage && (
+        <div className="p-3 bg-rose-50 border border-rose-200 rounded text-xs text-rose-800 flex items-start gap-2">
+          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+          <span>{errorMessage}</span>
         </div>
-      </div>
+      )}
 
-      {/* Upload Queue Section */}
-      {stagedFiles.length > 0 && (
-        <div className="bg-[#162032] border border-slate-800 rounded-2xl p-6 space-y-4">
-          <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-            <div>
-              <h3 className="text-sm font-semibold text-white">
-                Staged Evidence Queue ({stagedFiles.length} file{stagedFiles.length > 1 ? 's' : ''})
-              </h3>
-              <p className="text-[11px] text-slate-400 mt-0.5">
-                Add descriptive labels and notes before committing to the local vault.
-              </p>
-            </div>
+      <form onSubmit={handleSubmit} className="space-y-5">
+        {/* Case Selection */}
+        <div className="space-y-2">
+          <label className="block text-xs font-medium text-[#1C1917]">
+            Associate with case
+          </label>
 
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setStagedFiles([])}
-                disabled={isProcessing}
-              >
-                Clear All
-              </Button>
-              <Button
-                variant="cyan"
-                size="sm"
-                onClick={handleCommitUploads}
-                isLoading={isProcessing}
-                disabled={queuedCount === 0}
-              >
-                <ShieldCheck className="w-4 h-4" />
-                <span>
-                  {queuedCount > 0 ? `Commit & Hash ${queuedCount} File(s)` : 'All Preserved'}
-                </span>
-              </Button>
-            </div>
-          </div>
-
-          {/* Staged Cards List */}
-          <div className="space-y-3">
-            {stagedFiles.map((item) => (
-              <div
-                key={item.id}
-                className="bg-[#0F172A] border border-slate-700/70 rounded-xl p-4 space-y-3"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-center gap-3 min-w-0">
-                    {item.previewUrl ? (
-                      <img src={item.previewUrl} alt="preview" className="w-12 h-12 rounded-lg object-cover border border-slate-700" />
-                    ) : (
-                      <div className="w-12 h-12 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center shrink-0">
-                        {item.fileType === 'audio' && <Mic className="w-6 h-6 text-cyan-400" />}
-                        {item.fileType === 'document' && <FileText className="w-6 h-6 text-blue-400" />}
-                        {item.fileType === 'text' && <FileCode className="w-6 h-6 text-amber-400" />}
-                        {item.fileType === 'image' && <ImageIcon className="w-6 h-6 text-purple-400" />}
-                      </div>
-                    )}
-
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-semibold text-white truncate">{item.file.name}</span>
-                        <EvidenceTypeBadge type={item.fileType} />
-                      </div>
-                      <span className="text-[11px] font-mono text-slate-400">
-                        {formatBytes(item.file.size)} • Type: {item.fileType}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2 shrink-0">
-                    {item.status === 'completed' && (
-                      <span className="text-xs font-medium text-emerald-400 flex items-center gap-1">
-                        <CheckCircle2 className="w-4 h-4" /> Saved & Hashed
-                      </span>
-                    )}
-                    {item.status === 'validating' && (
-                      <span className="text-xs font-mono text-cyan-400 animate-pulse">Hashing raw bytes...</span>
-                    )}
-                    {item.status === 'uploading' && (
-                      <span className="text-xs font-mono text-blue-400 animate-pulse">Storing untouched...</span>
-                    )}
-                    {item.status === 'queued' && (
-                      <button
-                        onClick={() => handleRemoveStaged(item.id)}
-                        className="p-1 rounded text-slate-400 hover:text-rose-400 hover:bg-slate-800"
-                        title="Remove from queue"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                {/* Progress bar */}
-                {item.progress > 0 && (
-                  <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
-                    <div
-                      className={`h-full transition-all duration-300 ${
-                        item.status === 'completed' ? 'bg-emerald-400' : 'bg-cyan-400'
-                      }`}
-                      style={{ width: `${item.progress}%` }}
-                    />
-                  </div>
-                )}
-
-                {/* Edit display title & notes */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
-                  <input
-                    type="text"
-                    value={item.displayName}
-                    disabled={item.status === 'completed'}
-                    onChange={(e) => handleDisplayNameChange(item.id, e.target.value)}
-                    placeholder="Evidence display title..."
-                    className="bg-[#162032] border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
-                  />
-                  <input
-                    type="text"
-                    value={item.notes}
-                    disabled={item.status === 'completed'}
-                    onChange={(e) => handleNotesChange(item.id, e.target.value)}
-                    placeholder="Optional notes (e.g. WhatsApp screenshot from 12 March)..."
-                    className="bg-[#162032] border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {completedCount > 0 && (
-            <div className="flex items-center justify-between p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs">
-              <span className="flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4" />
-                Successfully committed {completedCount} evidence item(s) to case [{selectedCaseId}].
-              </span>
-              <Button variant="outline" size="sm" onClick={() => navigate('/vault')}>
-                Open Vault →
-              </Button>
+          {cases.length > 0 && (
+            <div className="flex items-center gap-4 text-xs text-[#6B6862] mb-1">
+              <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="radio"
+                  name="caseChoice"
+                  checked={!isCreatingNewCase}
+                  onChange={() => setIsCreatingNewCase(false)}
+                  className="accent-[#0F766E]"
+                />
+                Existing case
+              </label>
+              <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="radio"
+                  name="caseChoice"
+                  checked={isCreatingNewCase}
+                  onChange={() => setIsCreatingNewCase(true)}
+                  className="accent-[#0F766E]"
+                />
+                New case
+              </label>
             </div>
           )}
-        </div>
-      )}
 
-      {/* Explanatory Protocol Note */}
-      <div className="p-4 rounded-2xl bg-[#162032] border border-slate-800 text-xs text-slate-400 space-y-1">
-        <p className="font-semibold text-slate-300">Browser-Side Prototype Intake Protocol</p>
-        <p className="text-[11px] leading-relaxed">
-          Files are preserved untouched in the current browser session with SHA-256 integrity hashing.
-          In the future backend phase, this upload handler will stream raw byte arrays directly to FastAPI.
-        </p>
-      </div>
+          {!isCreatingNewCase && cases.length > 0 ? (
+            <select
+              value={selectedCaseId}
+              onChange={(e) => setSelectedCaseId(e.target.value)}
+              className="w-full bg-white border border-[#E6E4DF] rounded px-3 py-2 text-xs text-[#1C1917] font-mono focus:outline-none focus:border-[#0F766E]"
+            >
+              {cases.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.id} ({c.evidence_count || 0} files)
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              type="text"
+              value={newCaseIdInput}
+              onChange={(e) => setNewCaseIdInput(e.target.value)}
+              placeholder="Enter a new case ID, or leave blank to auto-generate"
+              className="w-full bg-white border border-[#E6E4DF] rounded px-3 py-2 text-xs text-[#1C1917] font-mono placeholder:font-sans focus:outline-none focus:border-[#0F766E]"
+            />
+          )}
+        </div>
+
+        {/* Dropzone */}
+        <div>
+          <label className="block text-xs font-medium text-[#1C1917] mb-1">
+            Files
+          </label>
+          <div
+            {...getRootProps()}
+            className={`border border-dashed rounded p-8 text-center cursor-pointer transition-colors ${
+              isDragActive
+                ? 'border-[#0F766E] bg-[#F0FDFA]'
+                : 'border-[#D6D3CD] bg-white hover:border-[#A8A29E]'
+            }`}
+          >
+            <input {...getInputProps()} />
+            <Upload className="w-5 h-5 text-[#6B6862] mx-auto mb-2" />
+            <p className="text-xs font-medium text-[#1C1917]">
+              {isDragActive ? 'Drop files here' : 'Drag files here, or click to browse'}
+            </p>
+            <p className="text-[11px] text-[#6B6862] mt-1">
+              Images (PNG, JPG, WEBP), Audio (MP3, WAV, M4A), Text (TXT, JSON, CSV, EML, PDF) • Up to 50 MB
+            </p>
+          </div>
+        </div>
+
+        {/* Staged file list */}
+        {stagedFiles.length > 0 && (
+          <div className="space-y-2">
+            <label className="block text-xs font-medium text-[#1C1917]">
+              Files to add ({stagedFiles.length})
+            </label>
+            <div className="border border-[#E6E4DF] rounded bg-white divide-y divide-[#E6E4DF]">
+              {stagedFiles.map((item) => (
+                <div key={item.id} className="p-3 flex items-start gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <span className="text-xs font-medium text-[#1C1917] truncate">
+                        {item.file.name}
+                      </span>
+                      <span className="text-[11px] text-[#6B6862] font-mono shrink-0">
+                        {formatBytes(item.file.size)}
+                      </span>
+                    </div>
+                    <input
+                      type="text"
+                      placeholder="Optional note (e.g. WhatsApp screenshot from 12 March)"
+                      value={item.notes}
+                      onChange={(e) => handleNoteChange(item.id, e.target.value)}
+                      className="w-full bg-[#FBFBF9] border border-[#E6E4DF] rounded px-2.5 py-1 text-xs text-[#1C1917] placeholder:text-[#9C9890] focus:outline-none focus:border-[#0F766E]"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveStaged(item.id)}
+                    className="p-1 text-[#9C9890] hover:text-rose-600 rounded"
+                    title="Remove file"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Actions */}
+        <div className="flex items-center justify-end gap-2 pt-2">
+          {stagedFiles.length > 0 && (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => setStagedFiles([])}
+              disabled={isUploading}
+            >
+              Clear
+            </Button>
+          )}
+          <Button
+            type="submit"
+            variant="primary"
+            size="sm"
+            isLoading={isUploading}
+            disabled={stagedFiles.length === 0}
+          >
+            Save evidence
+          </Button>
+        </div>
+      </form>
     </div>
   );
 };

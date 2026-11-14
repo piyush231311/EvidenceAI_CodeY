@@ -1,6 +1,5 @@
 /** @type {import('tailwindcss').Config} */
 export default {
-  darkMode: 'class',
   content: [
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
@@ -8,35 +7,43 @@ export default {
   theme: {
     extend: {
       colors: {
-        background: {
-          DEFAULT: '#0B1120', // Dark navy background
-          light: '#F8FAFC',
+        paper: {
+          DEFAULT: '#FBFBF9', // Soft warm paper background
+          sidebar: '#F4F3EE', // Calm warm sidebar
+          surface: '#FFFFFF', // Clean flat surface
+          border: '#E6E4DF',  // Subtle 1px warm border
+          hover: '#EFEFEA',
         },
-        sidebar: {
-          DEFAULT: '#0F172A', // Sidebar background
-          light: '#FFFFFF',
+        ink: {
+          DEFAULT: '#1C1917', // Dark charcoal text
+          muted: '#6B6862',   // Secondary readable text
+          light: '#9C9890',   // Subtle metadata
         },
-        surface: {
-          DEFAULT: '#1E293B', // Dark slate surfaces
-          light: '#FFFFFF',
-          hover: '#293548',
-          card: '#162032',
-          border: '#334155',
-        },
-        brand: {
-          primary: '#3B82F6', // Blue accent
-          secondary: '#22D3EE', // Cyan accent
-          dark: '#1D4ED8',
+        teal: {
+          DEFAULT: '#0F766E', // Muted deep teal primary accent
+          hover: '#115E59',
+          light: '#F0FDFA',
+          border: '#CCFBF1',
         },
       },
       fontFamily: {
-        sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
-        mono: ['JetBrains Mono', 'monospace'],
+        sans: [
+          'Inter',
+          '-apple-system',
+          'BlinkMacSystemFont',
+          '"Segoe UI"',
+          'Roboto',
+          'Helvetica',
+          'Arial',
+          'sans-serif'
+        ],
+        mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace'],
       },
-      boxShadow: {
-        'soft': '0 4px 20px -2px rgba(0, 0, 0, 0.35)',
-        'glow-primary': '0 0 20px rgba(59, 130, 246, 0.15)',
-        'glow-cyan': '0 0 20px rgba(34, 211, 238, 0.15)',
+      borderRadius: {
+        DEFAULT: '4px',
+        sm: '3px',
+        md: '6px',
+        lg: '8px',
       },
     },
   },
