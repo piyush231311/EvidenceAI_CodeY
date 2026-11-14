@@ -8,7 +8,7 @@ import { Button } from '../components/common/Button';
 const ALLOWED_EXTENSIONS = new Set([
   'png', 'jpg', 'jpeg', 'webp',
   'mp3', 'wav', 'm4a', 'ogg',
-  'txt', 'json', 'csv', 'eml', 'pdf'
+  'txt', 'json', 'csv', 'eml', 'pdf', 'docx'
 ]);
 
 const MAX_SIZE_BYTES = 50 * 1024 * 1024; // 50MB
