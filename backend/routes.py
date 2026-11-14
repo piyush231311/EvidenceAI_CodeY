@@ -2,7 +2,9 @@ import os
 import json
 import uuid
 import hashlib
-from typing import List, Optional
+import tempfile
+import time
+from typing import List, Optional, Any, Dict
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
 from fastapi.responses import FileResponse
@@ -76,6 +78,69 @@ def classify_file(filename: str, content_type: Optional[str]) -> str:
     )
 
 
+def run_pipeline_extraction(file_path: str, file_category: str) -> Dict[str, Any]:
+    """
+    Runs extraction pipeline based on file category:
+    - image: PaddleOCR (PP-OCRv6 small)
+    - audio: Faster-Whisper Small (lazy loaded)
+    - text:  Document & Log Text Extractor
+    """
+    result = {
+        "text": "",
+        "confidence": 0.0,
+        "metadata": {},
+        "processing_time_ms": 0.0,
+        "timestamps": [],
+        "success": False,
+    }
+
+    try:
+        if file_category == "image":
+            from src.extraction.ocr import extract_text_from_image
+            ocr_out = extract_text_from_image(file_path)
+            result["text"] = ocr_out.get("text", "")
+            result["confidence"] = ocr_out.get("confidence", 0.0)
+            result["processing_time_ms"] = ocr_out.get("processing_time_ms", 0.0)
+            result["metadata"] = {
+                "lines": ocr_out.get("lines", []),
+                "engine": "PaddleOCR PP-OCRv6_small",
+            }
+            result["success"] = True
+
+        elif file_category == "audio":
+            from src.extraction.transcription import transcribe_audio
+            audio_out = transcribe_audio(file_path)
+            result["text"] = audio_out.get("text", "")
+            result["confidence"] = audio_out.get("language_probability", 0.0)
+            result["processing_time_ms"] = audio_out.get("processing_time_ms", 0.0)
+            result["timestamps"] = audio_out.get("segments", [])
+            result["metadata"] = {
+                "language": audio_out.get("language"),
+                "duration": audio_out.get("duration"),
+                "segments": audio_out.get("segments", []),
+                "engine": "Faster-Whisper Small",
+            }
+            result["success"] = True
+
+        elif file_category == "text":
+            from src.extraction.text_extractor import extract_text_from_document
+            doc_out = extract_text_from_document(file_path)
+            result["text"] = doc_out.get("text", "")
+            result["confidence"] = doc_out.get("confidence", 1.0)
+            result["processing_time_ms"] = doc_out.get("processing_time_ms", 0.0)
+            result["metadata"] = {
+                "doc_metadata": doc_out.get("metadata", {}),
+                "engine": "Document Text Extractor",
+            }
+            result["success"] = True
+
+    except Exception as e:
+        result["metadata"] = {"error": str(e)}
+        result["success"] = False
+
+    return result
+
+
 @router.post("/cases/{case_id}/evidence", response_model=List[EvidenceResponse], status_code=status.HTTP_201_CREATED)
 async def upload_evidence(
     case_id: str,
@@ -91,12 +156,12 @@ async def upload_evidence(
     3. Saves untouched original file to storage/originals/{case_id}/{uuid}{ext}.
     4. Computes SHA-256 hash at upload time.
     5. Runs authenticity gate check.
-    6. Stores record in database and writes an append-only audit log entry.
+    6. Runs local AI extraction (PaddleOCR / Faster-Whisper / Text).
+    7. Stores record in database and writes an append-only audit log entry.
     """
     if not files:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No files provided.")
 
-    # Parse per-file notes mapping if supplied as JSON, otherwise fallback to single note
     parsed_notes_map = {}
     if notes_map:
         try:
@@ -104,14 +169,12 @@ async def upload_evidence(
         except Exception:
             parsed_notes_map = {}
 
-    # Ensure case exists or create it
     case = db.query(Case).filter(Case.id == case_id).first()
     if not case:
         case = Case(id=case_id)
         db.add(case)
         db.flush()
 
-    # Target storage directory for this case
     case_storage_dir = STORAGE_BASE_DIR / case_id
     case_storage_dir.mkdir(parents=True, exist_ok=True)
 
@@ -149,10 +212,13 @@ async def upload_evidence(
         # 5. Run authenticity gate
         auth_result = run_authenticity_gate(str(stored_path), file_category)
 
-        # Resolve note for this specific file
+        # 6. Run AI Extraction (PaddleOCR / Faster-Whisper / Document)
+        extraction_res = run_pipeline_extraction(str(stored_path), file_category)
+
+        # Resolve note
         file_note = parsed_notes_map.get(filename) or notes
 
-        # 6. Insert Evidence DB record
+        # 7. Insert Evidence DB record
         evidence_record = Evidence(
             id=evidence_id,
             case_id=case_id,
@@ -165,15 +231,19 @@ async def upload_evidence(
             notes=file_note,
             authenticity_passed=auth_result.get("passed", True),
             authenticity_score=auth_result.get("score"),
+            extracted_text=extraction_res.get("text"),
+            extraction_confidence=extraction_res.get("confidence"),
+            extraction_metadata=json.dumps(extraction_res.get("metadata", {})),
+            processing_time_ms=extraction_res.get("processing_time_ms"),
         )
         db.add(evidence_record)
 
-        # 7. Write append-only audit log entry
+        # 8. Write append-only audit log entry
         audit_entry = AuditLog(
             id=str(uuid.uuid4()),
             case_id=case_id,
             evidence_id=evidence_id,
-            action="UPLOADED",
+            action="UPLOADED_AND_EXTRACTED",
             details=json.dumps({
                 "original_filename": filename,
                 "file_type": file_category,
@@ -181,7 +251,9 @@ async def upload_evidence(
                 "size_bytes": size_bytes,
                 "sha256": sha256_hash,
                 "stored_path": str(stored_path.as_posix()),
-                "authenticity": auth_result
+                "authenticity": auth_result,
+                "extraction_success": extraction_res.get("success", False),
+                "processing_time_ms": extraction_res.get("processing_time_ms"),
             })
         )
         db.add(audit_entry)
@@ -193,6 +265,98 @@ async def upload_evidence(
         db.refresh(item)
 
     return created_evidence
+
+
+@router.post("/extract")
+async def extract_direct(
+    file: UploadFile = File(...),
+):
+    """
+    Direct extraction endpoint for ad-hoc or testing requests:
+    - Calculates SHA-256 hash from original bytes
+    - Preserves file bytes during processing
+    - Validates file type and size
+    - Runs PaddleOCR / Faster-Whisper / Text extractor
+    - Safely cleans up temporary file
+    - Returns structured JSON with source ID, extraction results, confidence, timestamps, and diagnostics
+    """
+    filename = file.filename or "unknown"
+    content_type = file.content_type or "application/octet-stream"
+
+    file_category = classify_file(filename, content_type)
+    file_bytes = await file.read()
+    size_bytes = len(file_bytes)
+
+    if size_bytes > MAX_FILE_SIZE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File '{filename}' exceeds maximum allowed size of 50 MB ({size_bytes} bytes)."
+        )
+
+    sha256_hash = hashlib.sha256(file_bytes).hexdigest()
+    source_id = str(uuid.uuid4())
+    ext = Path(filename).suffix.lower()
+
+    # Save to safe temporary file for model inference
+    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp_file:
+        tmp_file.write(file_bytes)
+        tmp_path = tmp_file.name
+
+    try:
+        extraction_res = run_pipeline_extraction(tmp_path, file_category)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+    return {
+        "source_id": source_id,
+        "filename": filename,
+        "sha256": sha256_hash,
+        "size_bytes": size_bytes,
+        "file_type": file_category,
+        "text": extraction_res.get("text", ""),
+        "confidence": extraction_res.get("confidence", 0.0),
+        "timestamps": extraction_res.get("timestamps", []),
+        "metadata": extraction_res.get("metadata", {}),
+        "processing_time_ms": extraction_res.get("processing_time_ms", 0.0),
+        "success": extraction_res.get("success", False),
+    }
+
+
+@router.post("/evidence/{evidence_id}/extract", response_model=EvidenceResponse)
+def trigger_evidence_extraction(evidence_id: str, db: Session = Depends(get_db)):
+    """
+    Trigger or re-run extraction on a stored evidence item.
+    """
+    record = db.query(Evidence).filter(Evidence.id == evidence_id).first()
+    if not record:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Evidence not found.")
+
+    file_path = Path(record.stored_path)
+    if not file_path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Original stored file is missing on disk.")
+
+    ext_res = run_pipeline_extraction(str(file_path), record.file_type)
+
+    record.extracted_text = ext_res.get("text")
+    record.extraction_confidence = ext_res.get("confidence")
+    record.extraction_metadata = json.dumps(ext_res.get("metadata", {}))
+    record.processing_time_ms = ext_res.get("processing_time_ms")
+
+    audit_entry = AuditLog(
+        id=str(uuid.uuid4()),
+        case_id=record.case_id,
+        evidence_id=record.id,
+        action="EXTRACTION_RECOMPUTED",
+        details=json.dumps({
+            "processing_time_ms": ext_res.get("processing_time_ms"),
+            "confidence": ext_res.get("confidence"),
+        })
+    )
+    db.add(audit_entry)
+    db.commit()
+    db.refresh(record)
+    return record
 
 
 @router.get("/cases/{case_id}/evidence", response_model=List[EvidenceResponse])
@@ -240,7 +404,6 @@ def get_case_audit_logs(case_id: str, db: Session = Depends(get_db)):
         .order_by(AuditLog.timestamp.asc())
         .all()
     )
-    # Parse JSON details if string
     result = []
     for log in logs:
         details_obj = None

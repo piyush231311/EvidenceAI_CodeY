@@ -81,8 +81,12 @@ export default function App() {
   const [stagedFiles, setStagedFiles] = useState([]); // files queued to upload
   const [evidenceList, setEvidenceList] = useState([]);
   const [isLoadingEvidence, setIsLoadingEvidence] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [expandedRows, setExpandedRows] = useState(new Set());
+  const [reExtractingId, setReExtractingId] = useState(null);
   const [copiedHash, setCopiedHash] = useState(null);
   const [dragActiveZone, setDragActiveZone] = useState(null);
+  const [backendOffline, setBackendOffline] = useState(false);
 
   // Initialize Case ID on first load
   useEffect(() => {
@@ -105,12 +109,15 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setEvidenceList(data);
+        setBackendOffline(false);
       } else {
         setEvidenceList([]);
+        setBackendOffline(true);
       }
     } catch (err) {
-      console.error('Failed to fetch evidence:', err);
+      console.warn('Backend service connection error:', err);
       setEvidenceList([]);
+      setBackendOffline(true);
     } finally {
       setIsLoadingEvidence(false);
     }
@@ -136,6 +143,41 @@ export default function App() {
     setErrorMessage('');
     setSuccessMessage(`New Case Generated: ${newId}`);
     setTimeout(() => setSuccessMessage(''), 3000);
+  };
+
+  const toggleExpandRow = (id) => {
+    setExpandedRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const handleReExtract = async (evidenceId) => {
+    setReExtractingId(evidenceId);
+    try {
+      const res = await fetch(`${API_BASE}/api/evidence/${evidenceId}/extract`, {
+        method: 'POST',
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setEvidenceList((prev) =>
+          prev.map((item) => (item.id === evidenceId ? updated : item))
+        );
+        setSuccessMessage(`AI extraction updated for ${updated.original_filename}`);
+        setTimeout(() => setSuccessMessage(''), 3000);
+      } else {
+        setErrorMessage('Failed to recompute extraction.');
+      }
+    } catch (err) {
+      setErrorMessage(`Error triggering extraction: ${err.message}`);
+    } finally {
+      setReExtractingId(null);
+    }
   };
 
   // Client-side file validation
@@ -177,7 +219,7 @@ export default function App() {
           previewUrl,
           notes: '',
           progress: 0,
-          status: 'Ready', // 'Ready' | 'Uploading' | 'Saved' | 'Failed'
+          status: 'Ready', // 'Ready' | 'Uploading' | 'Extracting AI...' | 'Saved' | 'Failed'
           errorText: null,
         });
       }
@@ -208,10 +250,9 @@ export default function App() {
     });
   };
 
-  // Upload an individual file with real progress tracking
+  // Upload an individual file with real progress tracking & extraction feedback
   const uploadSingleItem = (item, activeCaseId) => {
     return new Promise((resolve) => {
-      // Update item status to Uploading
       setStagedFiles((prev) =>
         prev.map((f) => (f.id === item.id ? { ...f, status: 'Uploading', progress: 10 } : f))
       );
@@ -231,9 +272,17 @@ export default function App() {
 
       xhr.upload.onprogress = (event) => {
         if (event.lengthComputable) {
-          const percentComplete = Math.min(95, Math.round((event.loaded / event.total) * 100));
+          const percentComplete = Math.min(85, Math.round((event.loaded / event.total) * 100));
           setStagedFiles((prev) =>
-            prev.map((f) => (f.id === item.id ? { ...f, progress: percentComplete } : f))
+            prev.map((f) =>
+              f.id === item.id
+                ? {
+                    ...f,
+                    progress: percentComplete,
+                    status: percentComplete >= 80 ? 'Extracting AI...' : 'Uploading',
+                  }
+                : f
+            )
           );
         }
       };
@@ -265,7 +314,12 @@ export default function App() {
         setStagedFiles((prev) =>
           prev.map((f) =>
             f.id === item.id
-              ? { ...f, status: 'Failed', progress: 100, errorText: 'Network connection error' }
+              ? {
+                  ...f,
+                  status: 'Failed',
+                  progress: 100,
+                  errorText: 'Cannot connect to backend server (http://127.0.0.1:8000).',
+                }
               : f
           )
         );
@@ -276,11 +330,14 @@ export default function App() {
     });
   };
 
-  // Upload all items currently in 'Ready' or 'Failed' status
+  // Upload all items currently in 'Ready' or 'Failed' status with duplicate prevention
   const handleUploadAll = async () => {
+    if (isUploading) return;
+
     const readyItems = stagedFiles.filter((item) => item.status === 'Ready' || item.status === 'Failed');
     if (readyItems.length === 0) return;
 
+    setIsUploading(true);
     setErrorMessage('');
     const targetCaseId = caseId || generateUUID();
     if (!caseId) {
@@ -288,21 +345,25 @@ export default function App() {
       setCaseInput(targetCaseId);
     }
 
-    const results = [];
-    for (const item of readyItems) {
-      const res = await uploadSingleItem(item, targetCaseId);
-      results.push(res);
-    }
+    try {
+      const results = [];
+      for (const item of readyItems) {
+        const res = await uploadSingleItem(item, targetCaseId);
+        results.push(res);
+      }
 
-    // Refresh evidence list from server
-    await fetchEvidence(targetCaseId);
+      // Refresh evidence list from server
+      await fetchEvidence(targetCaseId);
 
-    const failures = results.filter((r) => !r.success);
-    if (failures.length === 0) {
-      setSuccessMessage(`Successfully preserved ${results.length} evidence file(s) with SHA-256 integrity.`);
-      setTimeout(() => setSuccessMessage(''), 4000);
-    } else {
-      setErrorMessage(`Completed with ${failures.length} failure(s). Check item status badges.`);
+      const failures = results.filter((r) => !r.success);
+      if (failures.length === 0) {
+        setSuccessMessage(`Successfully processed ${results.length} evidence file(s) with AI text extraction and SHA-256 integrity.`);
+        setTimeout(() => setSuccessMessage(''), 4000);
+      } else {
+        setErrorMessage(`Completed with ${failures.length} failure(s). Check item status badges.`);
+      }
+    } finally {
+      setIsUploading(false);
     }
   };
 
@@ -353,13 +414,13 @@ export default function App() {
           </div>
           <div>
             <h1 className="brand-title">Evidence AI</h1>
-            <p className="brand-tagline">Victim-First Digital Evidence Platform • Intake & Forensic Preservation</p>
+            <p className="brand-tagline">Victim-First Digital Evidence Platform • Intake, Forensic Preservation & AI Extraction</p>
           </div>
         </div>
 
         <div className="privacy-badge">
           <span className="privacy-dot"></span>
-          <span className="privacy-text">Files are stored locally and never sent to third parties.</span>
+          <span className="privacy-text">Files are processed locally and never sent to third parties.</span>
         </div>
       </header>
 
@@ -379,13 +440,14 @@ export default function App() {
               className="case-input"
               value={caseInput}
               placeholder="Enter Case ID or auto-generate"
+              disabled={isUploading}
               onChange={(e) => setCaseInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleApplyCaseId()}
             />
-            <button className="btn btn-secondary" onClick={handleApplyCaseId} title="Load evidence for this case">
+            <button className="btn btn-secondary" onClick={handleApplyCaseId} disabled={isUploading} title="Load evidence for this case">
               Set Case
             </button>
-            <button className="btn btn-outline" onClick={handleNewCase} title="Generate a new Case UUID">
+            <button className="btn btn-outline" onClick={handleNewCase} disabled={isUploading} title="Generate a new Case UUID">
               + New Case
             </button>
           </div>
@@ -394,6 +456,22 @@ export default function App() {
           </div>
         </div>
       </section>
+
+      {/* Backend Offline Indicator Banner */}
+      {backendOffline && (
+        <div className="alert alert-warning" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '18px' }}>🔌</span>
+            <div>
+              <strong>Backend Offline:</strong> Python extraction server is not reachable at <code>http://127.0.0.1:8000</code>.
+              Launch the backend to upload and process evidence.
+            </div>
+          </div>
+          <button className="btn btn-secondary btn-sm" onClick={() => fetchEvidence(caseId)}>
+            ↻ Retry Connection
+          </button>
+        </div>
+      )}
 
       {/* Inline Feedback Alerts */}
       {errorMessage && (
@@ -418,7 +496,7 @@ export default function App() {
           <div>
             <h2 className="section-title">Upload Evidence</h2>
             <p className="section-desc">
-              Select or drag files into their designated evidence category. All files are hashed and securely saved untouched.
+              Select or drag files into their designated category. Files are hashed, forensically preserved, and processed with local AI extraction (PaddleOCR / Faster-Whisper).
             </p>
           </div>
 
@@ -427,18 +505,28 @@ export default function App() {
               <button
                 className="btn btn-primary"
                 onClick={handleUploadAll}
-                disabled={readyCount === 0}
+                disabled={readyCount === 0 || isUploading}
               >
-                <svg className="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                  <polyline points="17 8 12 3 7 8"/>
-                  <line x1="12" y1="3" x2="12" y2="15"/>
-                </svg>
-                {readyCount > 0 ? `Upload ${readyCount} Queued Item(s)` : 'All Files Uploaded'}
+                {isUploading ? (
+                  <>
+                    <span className="spinner"></span>
+                    Processing & Extracting...
+                  </>
+                ) : (
+                  <>
+                    <svg className="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                      <polyline points="17 8 12 3 7 8"/>
+                      <line x1="12" y1="3" x2="12" y2="15"/>
+                    </svg>
+                    {readyCount > 0 ? `Upload & Extract ${readyCount} Item(s)` : 'All Files Uploaded'}
+                  </>
+                )}
               </button>
               <button
                 className="btn btn-light"
                 onClick={() => setStagedFiles([])}
+                disabled={isUploading}
                 title="Clear queue"
               >
                 Clear Queue
@@ -469,16 +557,17 @@ export default function App() {
                 </div>
 
                 {/* Drop Area */}
-                <label className="zone-droparea">
+                <label className={`zone-droparea ${isUploading ? 'disabled' : ''}`}>
                   <input
                     type="file"
                     multiple
+                    disabled={isUploading}
                     accept={zone.accept}
                     className="zone-file-input"
                     onChange={(e) => {
                       if (e.target.files && e.target.files.length > 0) {
                         handleFilesAdded(e.target.files, zone.key);
-                        e.target.value = ''; // Reset input to allow re-uploading same file
+                        e.target.value = '';
                       }
                     }}
                   />
@@ -499,7 +588,7 @@ export default function App() {
                       Queued: {zoneStaged.length} file(s)
                     </div>
                     {zoneStaged.map((item) => (
-                      <div key={item.id} className={`staged-item status-${item.status.toLowerCase()}`}>
+                      <div key={item.id} className={`staged-item status-${item.status.toLowerCase().replace(/[^a-z]/g, '')}`}>
                         <div className="staged-item-main">
                           {item.previewUrl ? (
                             <img src={item.previewUrl} alt="Preview" className="staged-thumb" />
@@ -513,11 +602,11 @@ export default function App() {
                             <div className="staged-size">{formatBytes(item.size)}</div>
                           </div>
                           <div className="staged-badge-wrapper">
-                            <span className={`badge badge-${item.status.toLowerCase()}`}>
-                              {item.status === 'Uploading' && <span className="spinner"></span>}
+                            <span className={`badge badge-${item.status.toLowerCase().replace(/[^a-z]/g, '')}`}>
+                              {(item.status === 'Uploading' || item.status === 'Extracting AI...') && <span className="spinner"></span>}
                               {item.status}
                             </span>
-                            {item.status === 'Ready' && (
+                            {item.status === 'Ready' && !isUploading && (
                               <button
                                 className="item-remove-btn"
                                 onClick={() => handleRemoveStaged(item.id)}
@@ -536,16 +625,16 @@ export default function App() {
                             placeholder="Optional note (e.g. WhatsApp chat from 12 March)"
                             className="staged-notes-input"
                             value={item.notes}
-                            disabled={item.status === 'Uploading' || item.status === 'Saved'}
+                            disabled={item.status === 'Uploading' || item.status === 'Extracting AI...' || item.status === 'Saved' || isUploading}
                             onChange={(e) => handleNoteChange(item.id, e.target.value)}
                           />
                         </div>
 
                         {/* Progress Bar */}
-                        {(item.status === 'Uploading' || item.status === 'Saved' || item.status === 'Failed') && (
+                        {(item.status === 'Uploading' || item.status === 'Extracting AI...' || item.status === 'Saved' || item.status === 'Failed') && (
                           <div className="progress-container">
                             <div
-                              className={`progress-bar progress-${item.status.toLowerCase()}`}
+                              className={`progress-bar progress-${item.status.toLowerCase().replace(/[^a-z]/g, '')}`}
                               style={{ width: `${item.progress}%` }}
                             ></div>
                           </div>
@@ -570,10 +659,10 @@ export default function App() {
           <div>
             <h2 className="section-title">Evidence in this Case</h2>
             <p className="section-desc">
-              Immutable ledger of evidence saved to SQLite with cryptographic SHA-256 fingerprinting.
+              Immutable ledger of evidence saved with cryptographic SHA-256 fingerprinting and local AI extraction.
             </p>
           </div>
-          <button className="btn btn-secondary btn-sm" onClick={() => fetchEvidence(caseId)}>
+          <button className="btn btn-secondary btn-sm" onClick={() => fetchEvidence(caseId)} disabled={isLoadingEvidence}>
             ↻ Refresh Records
           </button>
         </div>
@@ -590,7 +679,7 @@ export default function App() {
               <polyline points="13 2 13 9 20 9"/>
             </svg>
             <h3>No evidence items uploaded yet for this case</h3>
-            <p>Upload screenshots, audio recordings, or text exports above to record them securely.</p>
+            <p>Upload screenshots, audio recordings, or text exports above to record and extract them securely.</p>
           </div>
         ) : (
           <div className="table-responsive">
@@ -599,11 +688,11 @@ export default function App() {
                 <tr>
                   <th>Filename</th>
                   <th>Category</th>
+                  <th>Extracted Intelligence</th>
                   <th>Size</th>
                   <th>Upload Time</th>
                   <th>SHA-256 Fingerprint</th>
-                  <th>Authenticity Gate</th>
-                  <th>Notes</th>
+                  <th>Authenticity</th>
                   <th>Actions</th>
                 </tr>
               </thead>
@@ -612,6 +701,12 @@ export default function App() {
                   const truncatedHash = `${item.sha256.substring(0, 10)}...${item.sha256.substring(item.sha256.length - 8)}`;
                   const isCopied = copiedHash === item.id;
                   const uploadDate = new Date(item.uploaded_at).toLocaleString();
+                  const isExpanded = expandedRows.has(item.id);
+
+                  let parsedMeta = null;
+                  try {
+                    parsedMeta = typeof item.extraction_metadata === 'string' ? JSON.parse(item.extraction_metadata) : item.extraction_metadata;
+                  } catch (e) {}
 
                   return (
                     <tr key={item.id}>
@@ -622,11 +717,75 @@ export default function App() {
                           {item.file_type === 'text' && '📄'}
                         </span>
                         <strong title={item.original_filename}>{item.original_filename}</strong>
+                        {item.notes && <div className="text-muted" style={{ fontSize: '11px', marginTop: '2px' }}>{item.notes}</div>}
                       </td>
                       <td>
                         <span className={`tag tag-${item.file_type}`}>
                           {item.file_type.toUpperCase()}
                         </span>
+                      </td>
+                      <td className="col-extraction">
+                        {item.extracted_text ? (
+                          <div className="extraction-summary">
+                            <div className="extraction-header-badges">
+                              {item.extraction_confidence != null && (
+                                <span
+                                  className={`badge-confidence ${item.extraction_confidence < 0.8 ? 'confidence-mid' : ''}`}
+                                  title="Recognition Confidence"
+                                >
+                                  {(item.extraction_confidence * 100).toFixed(1)}% Conf
+                                </span>
+                              )}
+                              {item.processing_time_ms != null && (
+                                <span className="badge-diagnostic" title="Processing Time Diagnostics">
+                                  ⚡ {item.processing_time_ms > 1000 ? (item.processing_time_ms / 1000).toFixed(2) + 's' : Math.round(item.processing_time_ms) + 'ms'}
+                                </span>
+                              )}
+                            </div>
+                            <div className="extraction-text-snippet">
+                              {item.extracted_text.length > 120
+                                ? item.extracted_text.substring(0, 120) + '...'
+                                : item.extracted_text}
+                            </div>
+                            <button
+                              className="btn-xs-link"
+                              onClick={() => toggleExpandRow(item.id)}
+                            >
+                              {isExpanded ? 'Hide Details ▲' : 'View Full Intelligence ▼'}
+                            </button>
+
+                            {isExpanded && (
+                              <div className="extraction-expand-panel">
+                                <div style={{ marginBottom: '4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                  <strong>Extracted Content:</strong>
+                                  <button
+                                    className="btn-xs-link"
+                                    onClick={() => copyToClipboard(item.extracted_text, `txt-${item.id}`)}
+                                  >
+                                    {copiedHash === `txt-${item.id}` ? '✓ Copied' : 'Copy Text'}
+                                  </button>
+                                </div>
+                                <div className="extraction-full-text">{item.extracted_text}</div>
+
+                                {parsedMeta && parsedMeta.segments && parsedMeta.segments.length > 0 && (
+                                  <div>
+                                    <strong style={{ fontSize: '11px' }}>Audio Segments & Timestamps:</strong>
+                                    <div className="segments-list">
+                                      {parsedMeta.segments.map((seg, sIdx) => (
+                                        <div key={sIdx} className="segment-item">
+                                          <span className="segment-timestamp">[{seg.start}s → {seg.end}s]</span>
+                                          <span className="segment-text">{seg.text}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <em className="text-muted" style={{ fontSize: '12px' }}>No text detected</em>
+                        )}
                       </td>
                       <td className="col-size">{formatBytes(item.size_bytes)}</td>
                       <td className="col-time">{uploadDate}</td>
@@ -649,17 +808,26 @@ export default function App() {
                           <span className="badge badge-failed">Flagged</span>
                         )}
                       </td>
-                      <td className="col-notes">{item.notes || <em className="text-muted">—</em>}</td>
                       <td>
-                        <a
-                          href={`${API_BASE}/api/evidence/${item.id}/file`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="btn btn-outline btn-xs"
-                          title="Download original untouched file"
-                        >
-                          Download
-                        </a>
+                        <div style={{ display: 'flex', gap: '4px' }}>
+                          <a
+                            href={`${API_BASE}/api/evidence/${item.id}/file`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="btn btn-outline btn-xs"
+                            title="Download original untouched file"
+                          >
+                            Download
+                          </a>
+                          <button
+                            className="btn btn-outline btn-xs"
+                            onClick={() => handleReExtract(item.id)}
+                            disabled={reExtractingId === item.id}
+                            title="Re-run AI extraction"
+                          >
+                            {reExtractingId === item.id ? '...' : '↻ Re-AI'}
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -675,9 +843,9 @@ export default function App() {
         <div className="forensic-guarantee">
           <div className="forensic-shield">⚖️</div>
           <div>
-            <strong>Forensic Preservation Assurance:</strong> All files are stored untouched in local storage
-            (<code>storage/originals/</code>), cryptographically fingerprinted using SHA-256, and logged to an
-            append-only audit trail for chain-of-custody integrity.
+            <strong>Forensic Preservation Assurance:</strong> All evidence files are stored untouched in local storage
+            (<code>storage/originals/</code>), cryptographically fingerprinted using SHA-256, logged to an
+            append-only audit trail, and transcribed locally with PaddleOCR and Faster-Whisper.
           </div>
         </div>
       </footer>

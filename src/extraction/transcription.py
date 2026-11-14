@@ -1,22 +1,20 @@
 """Audio transcription module using pretrained Faster-Whisper for Evidence AI."""
 
 import os
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-# Import ctranslate2 first on Windows to ensure correct OpenMP DLL initialization
-import ctranslate2
-
-# Suppress Hugging Face symlink warnings on Windows non-admin accounts
+# Suppress Hugging Face symlink warnings on Windows
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_MODELS_CACHE = PROJECT_ROOT / "models_cache"
 os.environ.setdefault("HF_HOME", str(DEFAULT_MODELS_CACHE / "huggingface"))
 
-SUPPORTED_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a"}
+SUPPORTED_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".ogg"}
 
-# Global singleton to avoid reloading model on every request
+# Global singleton - strictly lazy loaded on first audio request
 _WHISPER_MODEL = None
 _WHISPER_CONFIG = None
 
@@ -28,16 +26,8 @@ def get_whisper_model(
     download_root: Optional[Union[str, Path]] = None,
 ):
     """
-    Get or initialize the Faster-Whisper model instance.
-
-    Args:
-        model_size: Whisper model size ('small' by default).
-        device: 'cpu' for CPU inference (default) or 'cuda' for GPU acceleration.
-        compute_type: Quantization type ('int8' for CPU, 'float16' for GPU).
-        download_root: Directory to store model checkpoints.
-
-    Returns:
-        WhisperModel instance.
+    Lazy-load and cache the Faster-Whisper model instance.
+    Model weights are only loaded into memory when this function is called.
     """
     global _WHISPER_MODEL, _WHISPER_CONFIG
 
@@ -49,6 +39,8 @@ def get_whisper_model(
     current_config = (model_size, device, compute_type, download_root)
 
     if _WHISPER_MODEL is None or _WHISPER_CONFIG != current_config:
+        # Import ctranslate2 and faster_whisper lazily
+        import ctranslate2
         from faster_whisper import WhisperModel
 
         _WHISPER_MODEL = WhisperModel(
@@ -73,7 +65,7 @@ def transcribe_audio(
     Transcribe audio file into text with language detection and timestamps.
 
     Args:
-        audio_path: Path to MP3, WAV, or M4A audio file.
+        audio_path: Path to MP3, WAV, M4A, or OGG audio file.
         model_size: Model variant ('small' default).
         device: 'cpu' (default) or 'cuda' for GPU acceleration.
         compute_type: 'int8' for CPU, 'float16' for GPU.
@@ -85,12 +77,9 @@ def transcribe_audio(
             - 'language': Detected or specified language.
             - 'language_probability': Confidence score for detected language.
             - 'duration': Total audio duration in seconds.
-            - 'segments': List of dicts, each with 'id', 'start', 'end', 'text'.
+            - 'segments': List of dicts with 'id', 'start', 'end', 'text'.
+            - 'processing_time_ms': Inference time in milliseconds.
             - 'success': Boolean indicating transcription success.
-
-    Raises:
-        FileNotFoundError: If audio file does not exist.
-        ValueError: If file format is not supported (only MP3, WAV, M4A).
     """
     audio_path = Path(audio_path).resolve()
 
@@ -104,6 +93,7 @@ def transcribe_audio(
             f"Supported formats are: {', '.join(sorted(SUPPORTED_AUDIO_EXTENSIONS))}"
         )
 
+    t_start = time.perf_counter()
     model = get_whisper_model(
         model_size=model_size,
         device=device,
@@ -131,6 +121,7 @@ def transcribe_audio(
             text_chunks.append(clean_text)
 
     full_text = " ".join(text_chunks)
+    proc_time_ms = round((time.perf_counter() - t_start) * 1000, 2)
 
     return {
         "text": full_text,
@@ -138,5 +129,6 @@ def transcribe_audio(
         "language_probability": round(float(info.language_probability), 4),
         "duration": round(float(info.duration), 2),
         "segments": segments_list,
+        "processing_time_ms": proc_time_ms,
         "success": True,
     }

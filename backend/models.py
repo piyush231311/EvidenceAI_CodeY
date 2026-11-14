@@ -31,6 +31,10 @@ class Evidence(Base):
     authenticity_passed = Column(Boolean, default=True, nullable=False)
     authenticity_score = Column(Float, nullable=True)
     uploaded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    extracted_text = Column(Text, nullable=True)
+    extraction_confidence = Column(Float, nullable=True)
+    extraction_metadata = Column(Text, nullable=True)
+    processing_time_ms = Column(Float, nullable=True)
 
     case = relationship("Case", back_populates="evidence_items")
 
@@ -66,6 +70,10 @@ class EvidenceResponse(BaseModel):
     authenticity_passed: bool
     authenticity_score: Optional[float] = None
     uploaded_at: datetime
+    extracted_text: Optional[str] = None
+    extraction_confidence: Optional[float] = None
+    extraction_metadata: Optional[Any] = None
+    processing_time_ms: Optional[float] = None
 
 
 class CaseResponse(BaseModel):
