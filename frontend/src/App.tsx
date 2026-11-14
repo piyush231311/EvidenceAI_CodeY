@@ -8,6 +8,7 @@ import { Cases } from './pages/Cases';
 import { CaseDetails } from './pages/CaseDetails';
 import { UploadEvidence } from './pages/UploadEvidence';
 import { EvidenceVault } from './pages/EvidenceVault';
+import { Guide } from './pages/Guide';
 import { Settings } from './pages/Settings';
 
 export default function App() {
@@ -28,6 +29,7 @@ export default function App() {
             />
             <Route path="/upload" element={<UploadEvidence />} />
             <Route path="/evidence" element={<EvidenceVault />} />
+            <Route path="/guide" element={<Guide />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="*" element={<Navigate to="/cases" replace />} />
           </Route>

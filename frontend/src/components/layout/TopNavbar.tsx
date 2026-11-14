@@ -1,15 +1,16 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Upload } from 'lucide-react';
+import { Upload, LogOut } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Button } from '../common/Button';
+import { triggerQuickExit } from '../../hooks/useQuickExit';
 
 export const TopNavbar: React.FC = () => {
   const navigate = useNavigate();
   const { cases, activeCaseId, setActiveCaseId } = useApp();
 
   return (
-    <header className="h-14 bg-white border-b border-[#E6E4DF] px-6 flex items-center justify-between gap-4 sticky top-0 z-20">
+    <header className="h-14 bg-white border-b border-[#E6E4DF] px-6 flex items-center justify-between gap-4 sticky top-0 z-20 print:hidden">
       <div className="flex items-center gap-3">
         <span className="text-xs text-[#6B6862]">Active case:</span>
         {cases.length > 0 ? (
@@ -17,6 +18,7 @@ export const TopNavbar: React.FC = () => {
             value={activeCaseId}
             onChange={(e) => setActiveCaseId(e.target.value)}
             className="bg-[#FBFBF9] border border-[#E6E4DF] rounded px-2.5 py-1 text-xs text-[#1C1917] font-mono focus:outline-none focus:border-[#0F766E] cursor-pointer max-w-[220px] truncate"
+            aria-label="Select active case"
           >
             {cases.map((c) => (
               <option key={c.id} value={c.id}>
@@ -29,7 +31,7 @@ export const TopNavbar: React.FC = () => {
         )}
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2.5">
         <Button
           variant="primary"
           size="sm"
@@ -38,6 +40,17 @@ export const TopNavbar: React.FC = () => {
           <Upload className="w-3.5 h-3.5" />
           <span>Add evidence</span>
         </Button>
+
+        <button
+          onClick={triggerQuickExit}
+          type="button"
+          aria-label="Quick exit to neutral site (Press Escape twice)"
+          title="Instantly leave this page (or press Esc twice)"
+          className="h-8 px-3 rounded text-xs font-medium bg-[#F0EFEB] hover:bg-[#E4E2DC] text-[#1C1917] border border-[#DCDAD4] transition-colors flex items-center gap-1.5 focus:outline-none focus:ring-2 focus:ring-[#0F766E]"
+        >
+          <LogOut className="w-3.5 h-3.5 text-[#57534E]" />
+          <span>Quick exit</span>
+        </button>
       </div>
     </header>
   );
