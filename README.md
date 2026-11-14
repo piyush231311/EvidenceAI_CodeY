@@ -172,6 +172,49 @@ This is called on every upload and the result is committed to the database. Plug
 
 ---
 
+## 🔐 Self-Hosted User Authentication
+
+Evidence AI provides private, self-hosted user authentication designed specifically for victims of harassment, stalking, and domestic abuse. It requires no third-party identity providers, no external network requests, and no email addresses.
+
+### Setting up Environment Configuration
+
+1. Copy the example environment file:
+   ```bash
+   cp .env.example .env
+   ```
+2. Generate a secure, 32-byte hexadecimal secret key:
+   ```bash
+   python -c "import secrets; print(secrets.token_hex(32))"
+   ```
+3. Set `SECRET_KEY=<generated_value>` in `.env`.
+4. Ensure `.env` is never committed (it is excluded by `.gitignore`).
+
+### Running Backend with Auth Enabled
+
+When starting the backend, `backend/config.py` verifies that `SECRET_KEY` is at least 32 characters long and `migrate_auth.py` ensures the database schema is up-to-date:
+```bash
+uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+### Running Auth & Security Pytest Suite
+
+Run the full security test suite covering password rules, lockout, session cookies, CSRF defense, and data ownership isolation:
+```bash
+python -m pytest tests/test_auth_security.py -v
+```
+
+### Production Security Checklist
+
+When deploying to a production server:
+1. **Enforce HTTPS**: Required for `Secure` cookie transmission across networks.
+2. **Set `COOKIE_SECURE=true`**: Ensures session cookies are never transmitted over unencrypted plaintext HTTP.
+3. **Set `ALLOWED_ORIGIN`**: Set to the exact production frontend origin (e.g. `https://evidence.example.org`).
+4. **Set `COOKIE_SAMESITE=none`** if the frontend and backend are hosted on separate domains/subdomains over HTTPS (defaults to `lax` for same-origin local setups).
+5. **Reverse Proxy Configuration**: Ensure your reverse proxy (e.g. Nginx, Caddy) forwards `X-Forwarded-For` and `User-Agent` headers so rate-limiting and audit events accurately reflect client traffic.
+6. **Never Disable `X-Requested-With` Header**: All state-changing endpoints (`POST`, `PUT`, `DELETE`) require `X-Requested-With: evidence-ai` for CSRF defense.
+
+---
+
 ## 🔒 Privacy & Forensic Integrity
 
 - **Originals Untouched**: Files are written as binary streams directly to disk without alteration or re-compression.

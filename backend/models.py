@@ -7,12 +7,57 @@ from pydantic import BaseModel, ConfigDict, Field
 from .db import Base
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    username = Column(String(32), nullable=False)
+    username_normalized = Column(String(32), unique=True, nullable=False, index=True)
+    password_hash = Column(Text, nullable=False)
+    token_version = Column(Integer, default=0, nullable=False)
+    failed_attempts = Column(Integer, default=0, nullable=False)
+    locked_until = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_login_at = Column(DateTime, nullable=True)
+
+    cases = relationship("Case", back_populates="user", cascade="all, delete-orphan")
+    recovery_codes = relationship("RecoveryCode", back_populates="user", cascade="all, delete-orphan")
+
+
+class RecoveryCode(Base):
+    __tablename__ = "recovery_codes"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+    code_hash = Column(String(128), nullable=False)
+    used_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="recovery_codes")
+
+
+class AuthEvent(Base):
+    """
+    Append-only auth events log: never updated or deleted.
+    """
+    __tablename__ = "auth_events"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=True, index=True)
+    event = Column(String(64), nullable=False)
+    ip = Column(String(64), nullable=True)
+    user_agent = Column(String(200), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class Case(Base):
     __tablename__ = "cases"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
+    user = relationship("User", back_populates="cases")
     evidence_items = relationship("Evidence", back_populates="case", cascade="all, delete-orphan")
 
 
@@ -47,6 +92,7 @@ class AuditLog(Base):
     __tablename__ = "audit_log"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String(36), nullable=True, index=True)
     case_id = Column(String(36), nullable=False, index=True)
     evidence_id = Column(String(36), nullable=True, index=True)
     action = Column(String(64), nullable=False)  # e.g. "UPLOADED"
@@ -245,6 +291,7 @@ class CaseResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    user_id: Optional[str] = None
     created_at: datetime
 
 
@@ -252,11 +299,50 @@ class AuditLogResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    user_id: Optional[str] = None
     case_id: str
     evidence_id: Optional[str] = None
     action: str
     timestamp: datetime
     details: Optional[Any] = None
+
+
+class UserRegisterRequest(BaseModel):
+    username: str
+    password: str
+
+
+class UserLoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class RecoverAccountRequest(BaseModel):
+    username: str
+    recovery_code: str
+    new_password: str
+
+
+class RegenerateRecoveryCodesRequest(BaseModel):
+    current_password: str
+
+
+class UserResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    username: str
+    created_at: datetime
+
+
+class AuthResponse(BaseModel):
+    user: UserResponse
+    recovery_codes: Optional[List[str]] = None
 
 
 class EntityMentionSchema(BaseModel):

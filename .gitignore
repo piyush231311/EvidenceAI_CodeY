@@ -26,6 +26,8 @@ frontend/dist/
 *.db
 *.sqlite
 *.sqlite3
+*.bak
+*.db.bak
 
 # Storage (uploaded evidence files must never be committed)
 storage/

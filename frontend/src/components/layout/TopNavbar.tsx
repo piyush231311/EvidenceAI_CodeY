@@ -1,45 +1,81 @@
 import React from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Upload, LogOut } from 'lucide-react';
+import { useNavigate, Link } from 'react-router-dom';
+import { Upload, LogOut, Power } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { useAuth } from '../../context/AuthContext';
 import { Button } from '../common/Button';
 import { triggerQuickExit } from '../../hooks/useQuickExit';
 
 export const TopNavbar: React.FC = () => {
   const navigate = useNavigate();
   const { cases, activeCaseId, setActiveCaseId } = useApp();
+  const { user, logout } = useAuth();
+
+  const handleSignOut = async () => {
+    await logout();
+    navigate('/login');
+  };
 
   return (
     <header className="h-14 bg-white border-b border-[#E6E4DF] px-6 flex items-center justify-between gap-4 sticky top-0 z-20 print:hidden">
       <div className="flex items-center gap-3">
-        <span className="text-xs text-[#6B6862]">Active case:</span>
-        {cases.length > 0 ? (
-          <select
-            value={activeCaseId}
-            onChange={(e) => setActiveCaseId(e.target.value)}
-            className="bg-[#FBFBF9] border border-[#E6E4DF] rounded px-2.5 py-1 text-xs text-[#1C1917] font-mono focus:outline-none focus:border-[#0F766E] cursor-pointer max-w-[220px] truncate"
-            aria-label="Select active case"
-          >
-            {cases.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.id.substring(0, 16)}...
-              </option>
-            ))}
-          </select>
+        {user ? (
+          <>
+            <span className="text-xs text-[#6B6862]">Active case:</span>
+            {cases.length > 0 ? (
+              <select
+                value={activeCaseId}
+                onChange={(e) => setActiveCaseId(e.target.value)}
+                className="bg-[#FBFBF9] border border-[#E6E4DF] rounded px-2.5 py-1 text-xs text-[#1C1917] font-mono focus:outline-none focus:border-[#0F766E] cursor-pointer max-w-[220px] truncate"
+                aria-label="Select active case"
+              >
+                {cases.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.id.substring(0, 16)}...
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <span className="text-xs text-[#9C9890]">No cases created yet</span>
+            )}
+          </>
         ) : (
-          <span className="text-xs text-[#9C9890]">No cases created yet</span>
+          <span className="text-xs text-[#6B6862]">Evidence Gathering & Safety Advice</span>
         )}
       </div>
 
       <div className="flex items-center gap-2.5">
-        <Button
-          variant="primary"
-          size="sm"
-          onClick={() => navigate('/upload')}
-        >
-          <Upload className="w-3.5 h-3.5" />
-          <span>Add evidence</span>
-        </Button>
+        {user ? (
+          <>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => navigate('/upload')}
+            >
+              <Upload className="w-3.5 h-3.5" />
+              <span>Add evidence</span>
+            </Button>
+
+            <button
+              onClick={handleSignOut}
+              type="button"
+              aria-label="Sign out of Evidence AI"
+              title="Sign out of your account"
+              className="h-8 px-2.5 rounded text-xs text-[#6B6862] hover:text-[#1C1917] hover:bg-[#F5F5F0] transition-colors flex items-center gap-1.5 focus:outline-none"
+            >
+              <Power className="w-3.5 h-3.5 text-[#6B6862]" />
+              <span>Sign out</span>
+            </button>
+          </>
+        ) : (
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => navigate('/login')}
+          >
+            <span>Sign in</span>
+          </Button>
+        )}
 
         <button
           onClick={triggerQuickExit}

@@ -1,6 +1,7 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
 import { Case, EvidenceFile } from '../types';
 import { api } from '../services/api';
+import { useAuth } from './AuthContext';
 
 interface AppContextType {
   cases: Case[];
@@ -19,13 +20,21 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  const { user } = useAuth();
   const [cases, setCases] = useState<Case[]>([]);
   const [evidence, setEvidence] = useState<EvidenceFile[]>([]);
   const [activeCaseId, setActiveCaseId] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-  const refreshData = async () => {
+  const refreshData = useCallback(async () => {
+    if (!user) {
+      setCases([]);
+      setEvidence([]);
+      setActiveCaseId('');
+      setIsLoading(false);
+      return;
+    }
     try {
       setIsLoading(true);
       setError(null);
@@ -60,11 +69,18 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [user, activeCaseId]);
 
   useEffect(() => {
-    refreshData();
-  }, []);
+    if (user) {
+      refreshData();
+    } else {
+      setCases([]);
+      setEvidence([]);
+      setActiveCaseId('');
+      setIsLoading(false);
+    }
+  }, [user]);
 
   const createCase = async (caseId?: string) => {
     const created = await api.createCase(caseId);

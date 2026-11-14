@@ -52,18 +52,165 @@ export interface ApiEvidence {
   uploaded_at: string;
 }
 
+export interface User {
+  id: string;
+  username: string;
+  created_at: string;
+}
+
+export interface AuthResponse {
+  user: User;
+  recovery_codes?: string[] | null;
+}
+
 const API_BASE = '/api';
 
+/**
+ * Standardized fetch wrapper that includes credentials and CSRF header
+ */
+export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers || {});
+
+  const method = (init.method || 'GET').toUpperCase();
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+    headers.set('X-Requested-With', 'evidence-ai');
+  }
+
+  const response = await fetch(input, {
+    ...init,
+    credentials: 'include',
+    headers
+  });
+
+  if (response.status === 401) {
+    const urlStr = typeof input === 'string' ? input : input.toString();
+    // Do not dispatch global unauthorized redirect when checking initial /api/auth/me
+    if (!urlStr.includes('/api/auth/me')) {
+      window.dispatchEvent(new CustomEvent('evidence-ai-unauthorized'));
+    }
+  }
+
+  return response;
+}
+
 export const api = {
+  // Authentication & Account
+  auth: {
+    async getMe(): Promise<User> {
+      const res = await apiFetch(`${API_BASE}/auth/me`);
+      if (!res.ok) throw new Error('Not authenticated');
+      return res.json();
+    },
+
+    async register(username: string, password: string): Promise<AuthResponse> {
+      const res = await apiFetch(`${API_BASE}/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+      if (!res.ok) {
+        let msg = 'Registration failed';
+        try {
+          const err = await res.json();
+          if (err.detail) msg = err.detail;
+        } catch (e) {}
+        throw new Error(msg);
+      }
+      return res.json();
+    },
+
+    async login(username: string, password: string): Promise<AuthResponse> {
+      const res = await apiFetch(`${API_BASE}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+      if (!res.ok) {
+        let msg = "Username or password didn't match. Please try again.";
+        try {
+          const err = await res.json();
+          if (err.detail) msg = err.detail;
+        } catch (e) {}
+        throw new Error(msg);
+      }
+      return res.json();
+    },
+
+    async logout(allDevices: boolean = false): Promise<void> {
+      await apiFetch(`${API_BASE}/auth/logout?all_devices=${allDevices}`, {
+        method: 'POST'
+      });
+    },
+
+    async changePassword(currentPassword: string, newPassword: string): Promise<{ detail: string }> {
+      const res = await apiFetch(`${API_BASE}/auth/change-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          current_password: currentPassword,
+          new_password: newPassword
+        })
+      });
+      if (!res.ok) {
+        let msg = 'Failed to change password';
+        try {
+          const err = await res.json();
+          if (err.detail) msg = err.detail;
+        } catch (e) {}
+        throw new Error(msg);
+      }
+      return res.json();
+    },
+
+    async recover(username: string, recoveryCode: string, newPassword: string): Promise<AuthResponse> {
+      const res = await apiFetch(`${API_BASE}/auth/recover`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username,
+          recovery_code: recoveryCode,
+          new_password: newPassword
+        })
+      });
+      if (!res.ok) {
+        let msg = 'Recovery failed';
+        try {
+          const err = await res.json();
+          if (err.detail) msg = err.detail;
+        } catch (e) {}
+        throw new Error(msg);
+      }
+      return res.json();
+    },
+
+    async regenerateRecoveryCodes(password: string): Promise<string[]> {
+      const res = await apiFetch(`${API_BASE}/auth/recovery-codes/regenerate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password })
+      });
+      if (!res.ok) {
+        let msg = 'Failed to regenerate recovery codes';
+        try {
+          const err = await res.json();
+          if (err.detail) msg = err.detail;
+        } catch (e) {}
+        throw new Error(msg);
+      }
+      const data = await res.json();
+      return data.recovery_codes;
+    }
+  },
+
   // Cases
   async getCases(): Promise<ApiCase[]> {
-    const res = await fetch(`${API_BASE}/cases`);
+    const res = await apiFetch(`${API_BASE}/cases`);
     if (!res.ok) throw new Error('Failed to load cases');
     return res.json();
   },
 
   async createCase(caseId?: string): Promise<ApiCase> {
-    const res = await fetch(`${API_BASE}/cases`, {
+    const res = await apiFetch(`${API_BASE}/cases`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(caseId ? { id: caseId } : {})
@@ -73,7 +220,7 @@ export const api = {
   },
 
   async deleteCase(caseId: string): Promise<void> {
-    const res = await fetch(`${API_BASE}/cases/${caseId}`, {
+    const res = await apiFetch(`${API_BASE}/cases/${caseId}`, {
       method: 'DELETE'
     });
     if (!res.ok && res.status !== 404) throw new Error('Failed to delete case');
@@ -81,13 +228,13 @@ export const api = {
 
   // Evidence
   async getAllEvidence(): Promise<ApiEvidence[]> {
-    const res = await fetch(`${API_BASE}/evidence`);
+    const res = await apiFetch(`${API_BASE}/evidence`);
     if (!res.ok) throw new Error('Failed to load evidence');
     return res.json();
   },
 
   async getCaseEvidence(caseId: string): Promise<ApiEvidence[]> {
-    const res = await fetch(`${API_BASE}/cases/${caseId}/evidence`);
+    const res = await apiFetch(`${API_BASE}/cases/${caseId}/evidence`);
     if (!res.ok) throw new Error('Failed to load case evidence');
     return res.json();
   },
@@ -106,7 +253,7 @@ export const api = {
       formData.append('notes_map', JSON.stringify(notesMap));
     }
 
-    const res = await fetch(`${API_BASE}/cases/${caseId}/evidence`, {
+    const res = await apiFetch(`${API_BASE}/cases/${caseId}/evidence`, {
       method: 'POST',
       body: formData
     });
@@ -124,7 +271,7 @@ export const api = {
   },
 
   async deleteEvidence(evidenceId: string): Promise<void> {
-    const res = await fetch(`${API_BASE}/evidence/${evidenceId}`, {
+    const res = await apiFetch(`${API_BASE}/evidence/${evidenceId}`, {
       method: 'DELETE'
     });
     if (!res.ok && res.status !== 404) throw new Error('Failed to delete evidence');
@@ -136,7 +283,7 @@ export const api = {
 
   // Extraction
   async triggerExtraction(evidenceId: string): Promise<ApiEvidence> {
-    const res = await fetch(`${API_BASE}/evidence/${evidenceId}/extract`, {
+    const res = await apiFetch(`${API_BASE}/evidence/${evidenceId}/extract`, {
       method: 'POST'
     });
     if (!res.ok) throw new Error('Failed to run evidence extraction');
@@ -144,7 +291,7 @@ export const api = {
   },
 
   async extractAllCaseEvidence(caseId: string): Promise<ApiEvidence[]> {
-    const res = await fetch(`${API_BASE}/cases/${caseId}/extract-all`, {
+    const res = await apiFetch(`${API_BASE}/cases/${caseId}/extract-all`, {
       method: 'POST'
     });
     if (!res.ok) throw new Error('Failed to run batch extraction');
@@ -153,13 +300,13 @@ export const api = {
 
   // Entity Intelligence & Cross-Evidence Matching
   async getCaseEntities(caseId: string) {
-    const res = await fetch(`${API_BASE}/cases/${caseId}/entities`);
+    const res = await apiFetch(`${API_BASE}/cases/${caseId}/entities`);
     if (!res.ok) throw new Error('Failed to load case entities');
     return res.json();
   },
 
   async matchCaseEntities(caseId: string) {
-    const res = await fetch(`${API_BASE}/cases/${caseId}/entities/match`, {
+    const res = await apiFetch(`${API_BASE}/cases/${caseId}/entities/match`, {
       method: 'POST'
     });
     if (!res.ok) throw new Error('Failed to run entity matching');
@@ -167,7 +314,7 @@ export const api = {
   },
 
   async reviewEntityMatch(matchId: string, action: 'confirm' | 'reject' | 'separate' | 'undo', notes?: string) {
-    const res = await fetch(`${API_BASE}/entities/matches/${matchId}/review`, {
+    const res = await apiFetch(`${API_BASE}/entities/matches/${matchId}/review`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action, review_notes: notes })
@@ -178,7 +325,7 @@ export const api = {
 
   // Event Extraction & Intelligence
   async extractCaseEvents(caseId: string) {
-    const res = await fetch(`${API_BASE}/cases/${caseId}/events/extract`, {
+    const res = await apiFetch(`${API_BASE}/cases/${caseId}/events/extract`, {
       method: 'POST'
     });
     if (!res.ok) {
@@ -193,27 +340,27 @@ export const api = {
   },
 
   async getCaseEvents(caseId: string) {
-    const res = await fetch(`${API_BASE}/cases/${caseId}/events`);
+    const res = await apiFetch(`${API_BASE}/cases/${caseId}/events`);
     if (!res.ok) throw new Error('Failed to load case events');
     return res.json();
   },
 
   // Chronological Timeline & Corroboration
   async getCaseTimeline(caseId: string) {
-    const res = await fetch(`${API_BASE}/cases/${caseId}/timeline`);
+    const res = await apiFetch(`${API_BASE}/cases/${caseId}/timeline`);
     if (!res.ok) throw new Error('Failed to load case timeline');
     return res.json();
   },
 
   async getCaseContradictions(caseId: string) {
-    const res = await fetch(`${API_BASE}/cases/${caseId}/contradictions`);
+    const res = await apiFetch(`${API_BASE}/cases/${caseId}/contradictions`);
     if (!res.ok) throw new Error('Failed to load contradictions');
     return res.json();
   },
 
   // Clarification Quiz
   async generateClarificationQuiz(caseId: string) {
-    const res = await fetch(`${API_BASE}/cases/${caseId}/quiz/generate`, {
+    const res = await apiFetch(`${API_BASE}/cases/${caseId}/quiz/generate`, {
       method: 'POST'
     });
     if (!res.ok) throw new Error('Failed to generate clarification quiz');
@@ -221,13 +368,13 @@ export const api = {
   },
 
   async getClarificationQuiz(caseId: string) {
-    const res = await fetch(`${API_BASE}/cases/${caseId}/quiz`);
+    const res = await apiFetch(`${API_BASE}/cases/${caseId}/quiz`);
     if (!res.ok) throw new Error('Failed to load quiz');
     return res.json();
   },
 
   async getCaseUnderstanding(caseId: string) {
-    const res = await fetch(`${API_BASE}/cases/${caseId}/understanding`);
+    const res = await apiFetch(`${API_BASE}/cases/${caseId}/understanding`);
     if (!res.ok) throw new Error('Failed to load case understanding');
     return res.json();
   },
@@ -239,7 +386,7 @@ export const api = {
     user_surety: string;
     knowledge_basis: string;
   }) {
-    const res = await fetch(`${API_BASE}/cases/${caseId}/quiz/answers`, {
+    const res = await apiFetch(`${API_BASE}/cases/${caseId}/quiz/answers`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -249,7 +396,7 @@ export const api = {
   },
 
   async triggerReconstruction(caseId: string) {
-    const res = await fetch(`${API_BASE}/cases/${caseId}/reconstruct`, {
+    const res = await apiFetch(`${API_BASE}/cases/${caseId}/reconstruct`, {
       method: 'POST'
     });
     if (!res.ok) throw new Error('Failed to run iterative reconstruction');
@@ -258,7 +405,7 @@ export const api = {
 
   // Forensic Incident Reporting
   async generateReport(caseId: string) {
-    const res = await fetch(`${API_BASE}/cases/${caseId}/report/generate`, {
+    const res = await apiFetch(`${API_BASE}/cases/${caseId}/report/generate`, {
       method: 'POST'
     });
     if (!res.ok) throw new Error('Failed to generate incident report');
@@ -266,7 +413,7 @@ export const api = {
   },
 
   async getReport(caseId: string) {
-    const res = await fetch(`${API_BASE}/cases/${caseId}/report`);
+    const res = await apiFetch(`${API_BASE}/cases/${caseId}/report`);
     if (res.status === 404) return null; // Expected when report not yet generated
     if (!res.ok) throw new Error('Failed to load report');
     return res.json();
@@ -278,7 +425,7 @@ export const api = {
 
   // Streamlined Core MVP Case Analysis
   async analyzeCase(caseId: string): Promise<ApiAnalysisJob> {
-    const res = await fetch(`${API_BASE}/cases/${caseId}/analyze`, {
+    const res = await apiFetch(`${API_BASE}/cases/${caseId}/analyze`, {
       method: 'POST'
     });
     if (!res.ok) {
@@ -289,7 +436,7 @@ export const api = {
   },
 
   async getCaseAnalysis(caseId: string) {
-    const res = await fetch(`${API_BASE}/cases/${caseId}/analysis`);
+    const res = await apiFetch(`${API_BASE}/cases/${caseId}/analysis`);
     if (res.status === 404) return null; // Expected when case not yet analyzed
     if (!res.ok) throw new Error('Failed to load case analysis');
     return res.json();
@@ -298,7 +445,7 @@ export const api = {
   // One-Click Orchestrated Pipeline Job API
   async getActiveCaseJob(caseId: string): Promise<ApiAnalysisJob | null> {
     try {
-      const res = await fetch(`${API_BASE}/cases/${caseId}/analysis/active-job`);
+      const res = await apiFetch(`${API_BASE}/cases/${caseId}/analysis/active-job`);
       if (res.status === 404 || !res.ok) return null;
       const data = await res.json();
       return (data && data.id && data.current_stage) ? data : null;
@@ -308,25 +455,25 @@ export const api = {
   },
 
   async getAnalysisJob(jobId: string): Promise<ApiAnalysisJob> {
-    const res = await fetch(`${API_BASE}/analysis/jobs/${jobId}`);
+    const res = await apiFetch(`${API_BASE}/analysis/jobs/${jobId}`);
     if (!res.ok) throw new Error('Failed to load analysis job');
     return res.json();
   },
 
   async getAnalysisJobStages(jobId: string): Promise<ApiAnalysisStage[]> {
-    const res = await fetch(`${API_BASE}/analysis/jobs/${jobId}/stages`);
+    const res = await apiFetch(`${API_BASE}/analysis/jobs/${jobId}/stages`);
     if (!res.ok) throw new Error('Failed to load job stages');
     return res.json();
   },
 
   async getAnalysisJobResult(jobId: string): Promise<any> {
-    const res = await fetch(`${API_BASE}/analysis/jobs/${jobId}/result`);
+    const res = await apiFetch(`${API_BASE}/analysis/jobs/${jobId}/result`);
     if (!res.ok) throw new Error('Failed to load job result');
     return res.json();
   },
 
   async retryAnalysisJob(jobId: string): Promise<ApiAnalysisJob> {
-    const res = await fetch(`${API_BASE}/analysis/jobs/${jobId}/retry`, {
+    const res = await apiFetch(`${API_BASE}/analysis/jobs/${jobId}/retry`, {
       method: 'POST'
     });
     if (!res.ok) throw new Error('Failed to retry analysis job');
@@ -334,13 +481,13 @@ export const api = {
   },
 
   async getAnalysisJobQuiz(jobId: string): Promise<any[]> {
-    const res = await fetch(`${API_BASE}/analysis/jobs/${jobId}/quiz`);
+    const res = await apiFetch(`${API_BASE}/analysis/jobs/${jobId}/quiz`);
     if (!res.ok) throw new Error('Failed to load analysis quiz');
     return res.json();
   },
 
   async submitAnalysisJobQuiz(jobId: string, answers: any[]): Promise<{ status: string; job: ApiAnalysisJob }> {
-    const res = await fetch(`${API_BASE}/analysis/jobs/${jobId}/quiz/submit`, {
+    const res = await apiFetch(`${API_BASE}/analysis/jobs/${jobId}/quiz/submit`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ answers })

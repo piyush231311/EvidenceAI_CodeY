@@ -75,10 +75,12 @@ def init_db():
                     if col_name not in cols_ev:
                         conn.execute(text(f"ALTER TABLE evidence ADD COLUMN {col_name} {col_type}"))
                 conn.commit()
-                for col_name, col_type in q_migrations:
-                    if col_name not in cols_q:
-                        conn.execute(text(f"ALTER TABLE clarification_questions ADD COLUMN {col_name} {col_type}"))
-
-                conn.commit()
         except Exception:
             pass
+
+    # Run idempotent authentication schema migration
+    try:
+        from .migrate_auth import run_auth_migration
+        run_auth_migration()
+    except Exception as e:
+        print(f"[Warning] Auth migration error: {e}")

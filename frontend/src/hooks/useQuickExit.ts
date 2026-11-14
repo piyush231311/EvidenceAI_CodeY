@@ -3,6 +3,25 @@ import { QUICK_EXIT_URL } from '../content/guidance.js';
 
 export const triggerQuickExit = () => {
   try {
+    // Immediately terminate session on the server with keepalive so request completes
+    fetch('/api/auth/logout', {
+      method: 'POST',
+      keepalive: true,
+      credentials: 'include',
+      headers: {
+        'X-Requested-With': 'evidence-ai'
+      }
+    }).catch(() => {});
+  } catch (e) {}
+
+  try {
+    // Notify other tabs via BroadcastChannel if open
+    const channel = new BroadcastChannel('evidence_ai_auth');
+    channel.postMessage('LOGOUT');
+    channel.close();
+  } catch (e) {}
+
+  try {
     // Replace current history entry so Back button cannot return to app
     window.location.replace(QUICK_EXIT_URL);
   } catch (err) {

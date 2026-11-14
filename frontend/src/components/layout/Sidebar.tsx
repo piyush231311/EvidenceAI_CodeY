@@ -6,20 +6,26 @@ import {
   Files, 
   Settings as SettingsIcon,
   Shield,
-  BookOpen
+  BookOpen,
+  LogIn
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useApp } from '../../context/AppContext';
+import { useAuth } from '../../context/AuthContext';
 
 export const Sidebar: React.FC = () => {
   const { cases, evidence } = useApp();
+  const { user } = useAuth();
 
-  const navItems = [
+  const navItems = user ? [
     { name: 'Cases', path: '/cases', icon: Folder, count: cases.length },
     { name: 'Add evidence', path: '/upload', icon: Upload },
     { name: 'Evidence', path: '/evidence', icon: Files, count: evidence.length },
     { name: 'Guide', path: '/guide', icon: BookOpen },
     { name: 'Settings', path: '/settings', icon: SettingsIcon },
+  ] : [
+    { name: 'Guide', path: '/guide', icon: BookOpen },
+    { name: 'Sign in', path: '/login', icon: LogIn },
   ];
 
   return (
