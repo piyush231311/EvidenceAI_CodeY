@@ -34,6 +34,7 @@ backend/storage/
 # Temporary test artifacts
 test_files/
 *.zip
+scratch/
 
 # OS and editor files
 .DS_Store
@@ -70,6 +71,7 @@ evidence_uploads/
 !frontend/src/assets/*
 !frontend/public/*
 !storage/originals/.gitkeep
+!tests/data/*
 
 # Environment variables
 .env

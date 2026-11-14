@@ -62,6 +62,28 @@ def init_db():
                     if col_name not in cols_q:
                         conn.execute(text(f"ALTER TABLE clarification_questions ADD COLUMN {col_name} {col_type}"))
 
+                # Auto-migrate evidence table for review and quarantine status
+                res_e = conn.execute(text("PRAGMA table_info(evidence)"))
+                cols_e = [row[1] for row in res_e.fetchall()]
+                e_migrations = [
+                    ("review_status", "VARCHAR(32) DEFAULT 'INCLUDED'"),
+                    ("quarantine_reason", "TEXT"),
+                ]
+                for col_name, col_type in e_migrations:
+                    if col_name not in cols_e:
+                        conn.execute(text(f"ALTER TABLE evidence ADD COLUMN {col_name} {col_type}"))
+
+                # Auto-migrate analysis_jobs table for policy mode
+                res_j = conn.execute(text("PRAGMA table_info(analysis_jobs)"))
+                cols_j = [row[1] for row in res_j.fetchall()]
+                j_migrations = [
+                    ("policy_mode", "VARCHAR(32) DEFAULT 'DEVELOPMENT'"),
+                    ("policy_version", "VARCHAR(16) DEFAULT '1.0.0'"),
+                ]
+                for col_name, col_type in j_migrations:
+                    if col_name not in cols_j:
+                        conn.execute(text(f"ALTER TABLE analysis_jobs ADD COLUMN {col_name} {col_type}"))
+
                 conn.commit()
         except Exception:
             pass

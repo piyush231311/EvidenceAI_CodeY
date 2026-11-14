@@ -40,6 +40,8 @@ export const CaseDetails: React.FC = () => {
   const [isSubmittingJobQuiz, setIsSubmittingJobQuiz] = useState<boolean>(false);
   const [showTechnicalAppendix, setShowTechnicalAppendix] = useState<boolean>(false);
   const [showStagesList, setShowStagesList] = useState<boolean>(true);
+  const [reportViewMode, setReportViewMode] = useState<'brief' | 'detailed'>('brief');
+  const [showVisualObservations, setShowVisualObservations] = useState<boolean>(true);
   const [jobQuizAnswers, setJobQuizAnswers] = useState<Record<string, {
     selected_option: string;
     user_surety: string;
@@ -241,17 +243,26 @@ export const CaseDetails: React.FC = () => {
       const job = await api.getActiveCaseJob(id);
       if (job && job.id && job.current_stage) {
         setAnalysisJob(job);
-        if (job.artifacts?.mvp_analysis) {
-          setMvpAnalysis(job.artifacts.mvp_analysis);
-        } else if (job.status === 'WAITING_FOR_USER' || job.status === 'COMPLETED') {
-          loadMvpAnalysis();
+        if (job.policy_mode === 'STRICT_REVIEW' || job.policy_mode === 'DEVELOPMENT') {
+          setPolicyMode(job.policy_mode);
         }
-        if (job.status === 'WAITING_FOR_USER' || job.status === 'COMPLETED') {
-          const qs = await api.getAnalysisJobQuiz(job.id);
-          if (qs && qs.length > 0) setQuizQuestions(qs);
-        }
-        if (job.status === 'COMPLETED' || job.artifacts?.report_id) {
-          loadReport();
+        if (job.status === 'NO_ELIGIBLE_EVIDENCE') {
+          setMvpAnalysis(null);
+          setReportData(null);
+          setQuizQuestions([]);
+        } else {
+          if (job.artifacts?.mvp_analysis) {
+            setMvpAnalysis(job.artifacts.mvp_analysis);
+          } else if (job.status === 'WAITING_FOR_USER' || job.status === 'COMPLETED') {
+            loadMvpAnalysis();
+          }
+          if (job.status === 'WAITING_FOR_USER' || job.status === 'COMPLETED') {
+            const qs = await api.getAnalysisJobQuiz(job.id);
+            if (qs && qs.length > 0) setQuizQuestions(qs);
+          }
+          if (job.status === 'COMPLETED' || job.artifacts?.report_id) {
+            loadReport();
+          }
         }
       } else {
         setAnalysisJob(null);
@@ -262,14 +273,22 @@ export const CaseDetails: React.FC = () => {
     }
   };
 
+  const [policyMode, setPolicyMode] = useState<'DEVELOPMENT' | 'STRICT_REVIEW'>('DEVELOPMENT');
+
   const handleStartOneClickAnalysis = async () => {
     if (!id) return;
     try {
       setIsStartingJob(true);
-      const job = await api.analyzeCase(id);
+      const isReanalysis = Boolean(analysisJob && analysisJob.id);
+      const job = await api.analyzeCase(id, { policy_mode: policyMode, force_reanalysis: isReanalysis });
       if (job && job.id && job.current_stage) {
         setAnalysisJob(job);
-        showNotification('One-Click Analysis started. Tracking 15 pipeline stages live.');
+        if (job.status === 'NO_ELIGIBLE_EVIDENCE') {
+          setMvpAnalysis(null);
+          setReportData(null);
+          setQuizQuestions([]);
+        }
+        showNotification(`One-Click Analysis started under ${policyMode === 'STRICT_REVIEW' ? 'Strict Review' : 'Development'} policy. Tracking 18 pipeline stages live.`);
       } else {
         showNotification('Analysis job created. Syncing pipeline state...');
         await loadActiveJob();
@@ -279,6 +298,23 @@ export const CaseDetails: React.FC = () => {
       showNotification(err?.message || 'Failed to start analysis');
     } finally {
       setIsStartingJob(false);
+    }
+  };
+
+  const handleToggleQuarantine = async (file: EvidenceFile) => {
+    if (!id) return;
+    const isCurrentlyExcluded = ['EXCLUDED_BY_POLICY', 'EXCLUDED_PENDING_REVIEW', 'EXCLUDED_BY_INVESTIGATOR'].includes(file.review_status || '');
+    const targetStatus = isCurrentlyExcluded ? 'RESTORED_BY_INVESTIGATOR' : 'EXCLUDED_BY_INVESTIGATOR';
+    const reason = isCurrentlyExcluded
+      ? 'Manually restored to active reconstruction by investigator override.'
+      : 'Manually excluded from active reconstruction by investigator override.';
+
+    try {
+      const updated = await api.updateEvidenceQuarantine(id, file.id, targetStatus, reason);
+      setCaseEvidence(prev => prev.map(f => f.id === file.id ? { ...f, review_status: updated.review_status, quarantine_reason: updated.quarantine_reason } : f));
+      showNotification(`Evidence ${file.original_filename} ${isCurrentlyExcluded ? 'restored to reconstruction' : 'quarantined and excluded'}.`);
+    } catch (err: any) {
+      showNotification(err?.message || 'Failed to update quarantine status');
     }
   };
 
@@ -872,16 +908,44 @@ export const CaseDetails: React.FC = () => {
                         </span>
                       ) : (
                         <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-stone-100 text-stone-600 border border-stone-200">
-                          15-Stage Pipeline Ready
+                          18-Stage Pipeline Ready
                         </span>
                       )}
                     </div>
                     <p className="text-xs text-[#6B6862] mt-1">
-                      Orchestrates cryptographic validation, OCR/transcription, entity matching, timeline construction, clarification quiz, and final forensic report.
+                      Orchestrates cryptographic validation, media deepfake screening, policy quarantine, OCR/transcription, entity matching, timeline construction, clarification quiz, and final forensic report.
                     </p>
                   </div>
 
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    {/* Policy Mode Selector */}
+                    <div className="flex items-center rounded border border-[#E6E4DF] bg-[#F9F9F7] p-0.5 text-xs">
+                      <button
+                        type="button"
+                        onClick={() => setPolicyMode('DEVELOPMENT')}
+                        className={`px-2 py-1 rounded text-[11px] font-semibold transition-colors ${
+                          policyMode === 'DEVELOPMENT'
+                            ? 'bg-[#0F766E] text-white shadow-xs'
+                            : 'text-[#6B6862] hover:text-[#1C1917]'
+                        }`}
+                        title="Development Mode: Flags synthetic media but retains test files in active reconstruction"
+                      >
+                        Dev Policy
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPolicyMode('STRICT_REVIEW')}
+                        className={`px-2 py-1 rounded text-[11px] font-semibold transition-colors ${
+                          policyMode === 'STRICT_REVIEW'
+                            ? 'bg-rose-700 text-white shadow-xs'
+                            : 'text-[#6B6862] hover:text-[#1C1917]'
+                        }`}
+                        title="Strict Review Mode: Automatically quarantines synthetic media and excludes it from timeline and narrative"
+                      >
+                        Strict Review
+                      </button>
+                    </div>
+
                     {analysisJob && analysisJob.status === 'FAILED' ? (
                       <Button
                         variant="primary"
@@ -925,7 +989,7 @@ export const CaseDetails: React.FC = () => {
                           onClick={() => setShowStagesList(!showStagesList)}
                           className="inline-flex items-center gap-1 text-[11px] text-[#0F766E] hover:underline"
                         >
-                          <span>{showStagesList ? 'Hide 15 Stages' : 'Show 15 Stages'}</span>
+                          <span>{showStagesList ? 'Hide 18 Stages' : 'Show 18 Stages'}</span>
                           {showStagesList ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
                         </button>
                       </div>
@@ -938,127 +1002,348 @@ export const CaseDetails: React.FC = () => {
                       />
                     </div>
 
-                    {/* 15 Discrete Stages List */}
-                    {showStagesList && (
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-2 pt-2 border-t border-[#E6E4DF]">
-                        {[
-                          { key: 'VALIDATE_EVIDENCE', label: '1. Validate Evidence', desc: 'SHA-256 integrity' },
-                          { key: 'EXTRACT_CONTENT', label: '2. Extract Content', desc: 'OCR & ASR models' },
-                          { key: 'NORMALIZE_CONTENT', label: '3. Normalize Content', desc: 'Encoding & segments' },
-                          { key: 'EXTRACT_ENTITIES', label: '4. Extract Entities', desc: 'GLiNER entity extraction' },
-                          { key: 'MATCH_ENTITIES', label: '5. Disambiguate Entities', desc: 'RapidFuzz alias matching' },
-                          { key: 'UNDERSTAND_CASE', label: '6. Understand Case', desc: 'Domain & grounded facts' },
-                          { key: 'EXTRACT_EVENTS', label: '7. Extract Events', desc: 'Multi-line bank & chats' },
-                          { key: 'BUILD_TIMELINE', label: '8. Build Timeline', desc: 'Deterministic chronology' },
-                          { key: 'IDENTIFY_UNCERTAINTIES', label: '9. Identify Uncertainties', desc: 'Cross-evidence discrepancies' },
-                          { key: 'GENERATE_PRELIMINARY_STORY', label: '10. Preliminary Story', desc: '150–250 word draft' },
-                          { key: 'GENERATE_CONTEXTUAL_QUIZ', label: '11. Contextual Quiz', desc: 'Case unknown questions' },
-                          { key: 'AWAIT_USER_ANSWERS', label: '12. Awaiting Testimony', desc: 'Clarification answers' },
-                          { key: 'INCORPORATE_CLARIFICATIONS', label: '13. Incorporate Input', desc: 'Refining weights' },
-                          { key: 'GENERATE_FINAL_REPORT', label: '14. Final Report', desc: '200–350 word narrative' },
-                          { key: 'COMPLETE', label: '15. Complete', desc: 'Investigation finalized' },
-                        ].map((stageDef) => {
-                          const stageRec = analysisJob.stages?.find(s => s.stage_name === stageDef.key);
-                          const isDone = analysisJob.completed_stages?.includes(stageDef.key) || stageRec?.status === 'COMPLETED';
-                          const isRunning = analysisJob.current_stage === stageDef.key && analysisJob.status === 'RUNNING';
-                          const isWaiting = stageDef.key === 'AWAIT_USER_ANSWERS' && analysisJob.status === 'WAITING_FOR_USER';
-                          const isFailed = analysisJob.failed_stage === stageDef.key;
+                    {/* Zero Eligible Evidence Quarantine Alert */}
+                    {analysisJob && analysisJob.status === 'NO_ELIGIBLE_EVIDENCE' && (
+                      <div className="bg-rose-50 border border-rose-300 rounded-md p-4 text-xs space-y-2">
+                        <div className="flex items-center gap-2 text-rose-800 font-bold text-sm">
+                          <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0" />
+                          <span>Pipeline Halted: Zero Eligible Evidence Under Strict Review Policy</span>
+                        </div>
+                        <p className="text-rose-700 leading-relaxed">
+                          All uploaded media files were classified as synthetic or AI-manipulated and were quarantined under <strong>Strict Review Mode</strong>. Downstream reconstruction (OCR, entities, events, timeline, preliminary narrative, and report generation) has been securely suspended to prevent synthetic evidence contamination.
+                        </p>
+                        <div className="flex flex-wrap items-center gap-3 pt-1 text-[11px] text-rose-800 font-medium">
+                          <span>• Switch to <strong>Development Mode</strong> above and click <em>Re-Analyze Case</em> to run synthetic testing with audit disclaimers.</span>
+                          <span>• Or manually inspect and restore specific files in the evidence table below using investigator overrides.</span>
+                        </div>
+                      </div>
+                    )}
 
+                    {/* 16 Discrete Stages List (including Semantic Vision) */}
+                    {showStagesList && (
+                      <div className="space-y-2.5 pt-2 border-t border-[#E6E4DF]">
+                        {(() => {
+                          const visStage = analysisJob.stages?.find(s => s.stage_name === 'ANALYZE_IMAGES_SEMANTICALLY');
+                          const visDetails = visStage?.details || {};
+                          if (!visStage) return null;
                           return (
-                            <div
-                              key={stageDef.key}
-                              className={`p-2 rounded border text-xs flex items-start gap-2 transition-colors ${
-                                isRunning
-                                  ? 'bg-teal-50 border-[#0F766E]/40'
-                                  : isWaiting
-                                  ? 'bg-amber-50 border-amber-300'
-                                  : isDone
-                                  ? 'bg-emerald-50/50 border-emerald-200'
-                                  : isFailed
-                                  ? 'bg-rose-50 border-rose-300'
-                                  : 'bg-[#F9F9F7] border-stone-200 opacity-60'
-                              }`}
-                            >
-                              <div className="pt-0.5 shrink-0">
-                                {isDone ? (
-                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                                ) : isRunning ? (
-                                  <RefreshCw className="w-3.5 h-3.5 text-[#0F766E] animate-spin" />
-                                ) : isWaiting ? (
-                                  <Clock className="w-3.5 h-3.5 text-amber-600 animate-pulse" />
-                                ) : isFailed ? (
-                                  <XCircle className="w-3.5 h-3.5 text-rose-600" />
-                                ) : (
-                                  <div className="w-3 h-3 rounded-full border border-stone-300" />
-                                )}
+                            <div className="bg-purple-50/60 border border-purple-200 rounded p-2.5 text-xs flex flex-wrap items-center justify-between gap-2">
+                              <div className="flex items-center gap-2">
+                                <Eye className="w-3.5 h-3.5 text-purple-700" />
+                                <span className="font-semibold text-purple-950">Understanding Image Content (Qwen3-VL):</span>
+                                <span className="text-purple-800 font-mono text-[11px]">
+                                  {visDetails.current_model_activity || (visStage.status === 'COMPLETED' ? 'Completed' : visStage.status)}
+                                </span>
                               </div>
-                              <div className="min-w-0 flex-1">
-                                <div className="flex items-center justify-between gap-1">
-                                  <span className={`font-semibold truncate ${
-                                    isRunning ? 'text-[#0F766E]' : isWaiting ? 'text-amber-800' : isDone ? 'text-emerald-900' : 'text-stone-700'
-                                  }`}>
-                                    {stageDef.label}
+                              <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono">
+                                <span className="px-1.5 py-0.5 rounded bg-white border border-purple-200 text-stone-700">
+                                  Waiting: <strong>{visDetails.images_waiting ?? 0}</strong>
+                                </span>
+                                <span className="px-1.5 py-0.5 rounded bg-white border border-purple-200 text-stone-700">
+                                  Processed: <strong>{visDetails.images_processed ?? 0}/{visDetails.images_total ?? 0}</strong>
+                                </span>
+                                <span className="px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-emerald-800">
+                                  Completed: <strong>{visDetails.images_completed ?? 0}</strong>
+                                </span>
+                                {(visDetails.images_failed ?? 0) > 0 && (
+                                  <span className="px-1.5 py-0.5 rounded bg-rose-50 border border-rose-200 text-rose-800">
+                                    Failed: <strong>{visDetails.images_failed}</strong>
                                   </span>
-                                  {stageRec?.duration_ms && (
-                                    <span className="text-[10px] text-stone-500 font-mono">
-                                      {stageRec.duration_ms > 1000
-                                        ? `${(stageRec.duration_ms / 1000).toFixed(1)}s`
-                                        : `${Math.round(stageRec.duration_ms)}ms`}
-                                    </span>
-                                  )}
-                                </div>
-                                <p className="text-[11px] text-stone-500 truncate">{stageDef.desc}</p>
+                                )}
+                                {(visDetails.images_skipped ?? 0) > 0 && (
+                                  <span className="px-1.5 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-800">
+                                    Skipped: <strong>{visDetails.images_skipped}</strong>
+                                  </span>
+                                )}
                               </div>
                             </div>
                           );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                )}
+                        })()}
 
-                {/* STAGE 10+: PRELIMINARY CASE STORY & EVIDENCE-BACKED FACTS */}
-                {(analysisJob?.artifacts?.mvp_analysis || mvpAnalysis) && (
-                  <div className="border-t border-[#E6E4DF] pt-4 space-y-4">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <span className="text-[11px] uppercase tracking-wider text-[#0F766E] font-semibold block">
-                          Preliminary Case Story (Grounded Narrative)
-                        </span>
-                        <h4 className="text-sm font-bold text-[#1C1917]">
-                          {(analysisJob?.artifacts?.mvp_analysis?.case_title) || mvpAnalysis?.case_title}
-                        </h4>
-                      </div>
-                      <span className="text-xs text-[#6B6862] font-mono">
-                        {(analysisJob?.artifacts?.mvp_analysis?.narrative_word_count) || mvpAnalysis?.narrative_word_count} words
-                      </span>
-                    </div>
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                          {[
+                            { key: 'VALIDATE_EVIDENCE', label: '1. Validate Evidence', desc: 'SHA-256 integrity' },
+                            { key: 'ASSESS_MEDIA_AUTHENTICITY', label: '2. Media Authenticity', desc: 'Deepfake & provenance audit' },
+                            { key: 'APPLY_EVIDENCE_POLICY', label: '3. Evidence Policy', desc: 'Quarantine & synthetic filtering' },
+                            { key: 'EXTRACT_CONTENT', label: '4. Extract Content', desc: 'OCR & ASR models' },
+                            { key: 'NORMALIZE_CONTENT', label: '5. Normalize Content', desc: 'Encoding & segments' },
+                            { key: 'ANALYZE_IMAGES_SEMANTICALLY', label: '6. Image Understanding', desc: 'Qwen3-VL visual semantics' },
+                            { key: 'EXTRACT_ENTITIES', label: '7. Extract Entities', desc: 'GLiNER entity extraction' },
+                            { key: 'MATCH_ENTITIES', label: '8. Disambiguate Entities', desc: 'RapidFuzz alias matching' },
+                            { key: 'UNDERSTAND_CASE', label: '9. Understand Case', desc: 'Domain & grounded facts' },
+                            { key: 'EXTRACT_EVENTS', label: '10. Extract Events', desc: 'Multi-line bank & chats' },
+                            { key: 'BUILD_TIMELINE', label: '11. Build Timeline', desc: 'Deterministic chronology' },
+                            { key: 'IDENTIFY_UNCERTAINTIES', label: '12. Identify Uncertainties', desc: 'Cross-evidence discrepancies' },
+                            { key: 'GENERATE_PRELIMINARY_STORY', label: '13. Preliminary Story', desc: 'Brief Summary & Detailed Report' },
+                            { key: 'GENERATE_CONTEXTUAL_QUIZ', label: '14. Contextual Quiz', desc: 'Case unknown questions' },
+                            { key: 'AWAIT_USER_ANSWERS', label: '15. Awaiting Testimony', desc: 'Clarification answers' },
+                            { key: 'INCORPORATE_CLARIFICATIONS', label: '16. Incorporate Input', desc: 'Refining weights' },
+                            { key: 'GENERATE_FINAL_REPORT', label: '17. Final Report', desc: '200–350 word narrative' },
+                            { key: 'COMPLETE', label: '18. Complete', desc: 'Investigation finalized' },
+                          ].map((stageDef) => {
+                            const stageRec = analysisJob.stages?.find(s => s.stage_name === stageDef.key);
+                            const isDone = analysisJob.completed_stages?.includes(stageDef.key) || stageRec?.status === 'COMPLETED';
+                            const isRunning = analysisJob.current_stage === stageDef.key && analysisJob.status === 'RUNNING';
+                            const isWaiting = stageDef.key === 'AWAIT_USER_ANSWERS' && analysisJob.status === 'WAITING_FOR_USER';
+                            const isFailed = analysisJob.failed_stage === stageDef.key;
+                            const isSkipped = stageRec?.status === 'SKIPPED';
 
-                    <p className="text-xs text-[#334155] leading-relaxed whitespace-pre-wrap bg-[#F9F9F7] p-4 rounded border border-[#E6E4DF]">
-                      {(analysisJob?.artifacts?.mvp_analysis?.preliminary_narrative) || mvpAnalysis?.preliminary_narrative}
-                    </p>
-
-                    {/* Evidence-Backed Facts Grid */}
-                    {(((analysisJob?.artifacts?.mvp_analysis?.evidence_backed_facts) || mvpAnalysis?.evidence_backed_facts) || []).length > 0 && (
-                      <div className="space-y-2">
-                        <h5 className="text-xs font-semibold uppercase tracking-wider text-[#6B6862]">
-                          Key Evidence-Backed Facts ({(((analysisJob?.artifacts?.mvp_analysis?.evidence_backed_facts) || mvpAnalysis?.evidence_backed_facts) || []).length})
-                        </h5>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                          {(((analysisJob?.artifacts?.mvp_analysis?.evidence_backed_facts) || mvpAnalysis?.evidence_backed_facts) || []).map((fact: any, fIdx: number) => (
-                            <div key={fIdx} className="bg-white p-3 rounded border border-[#E6E4DF] text-xs space-y-1">
-                              <span className="font-semibold text-[#1C1917] block">{fact.topic}</span>
-                              <p className="text-[#334155] text-[11px] leading-relaxed">{fact.claim_text}</p>
-                              <div className="pt-1 text-[10px] text-[#6B6862] font-mono truncate" title={fact.citation?.verbatim_quote}>
-                                <span className="font-semibold text-[#0F766E]">{fact.citation?.filename}:</span> "{fact.citation?.verbatim_quote}"
+                            return (
+                              <div
+                                key={stageDef.key}
+                                className={`p-2 rounded border text-xs flex items-start gap-2 transition-colors ${
+                                  isRunning
+                                    ? 'bg-teal-50 border-[#0F766E]/40'
+                                    : isWaiting
+                                    ? 'bg-amber-50 border-amber-300'
+                                    : isDone
+                                    ? 'bg-emerald-50/50 border-emerald-200'
+                                    : isFailed
+                                    ? 'bg-rose-50 border-rose-300'
+                                    : isSkipped
+                                    ? 'bg-stone-100 border-stone-200 opacity-50'
+                                    : 'bg-[#F9F9F7] border-stone-200 opacity-60'
+                                }`}
+                              >
+                                <div className="pt-0.5 shrink-0">
+                                  {isDone ? (
+                                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                                  ) : isRunning ? (
+                                    <RefreshCw className="w-3.5 h-3.5 text-[#0F766E] animate-spin" />
+                                  ) : isWaiting ? (
+                                    <Clock className="w-3.5 h-3.5 text-amber-600 animate-pulse" />
+                                  ) : isFailed ? (
+                                    <XCircle className="w-3.5 h-3.5 text-rose-600" />
+                                  ) : isSkipped ? (
+                                    <AlertCircle className="w-3.5 h-3.5 text-stone-400" />
+                                  ) : (
+                                    <div className="w-3 h-3 rounded-full border border-stone-300" />
+                                  )}
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center justify-between gap-1">
+                                    <span className={`font-semibold truncate ${
+                                      isRunning ? 'text-[#0F766E]' : isWaiting ? 'text-amber-800' : isDone ? 'text-emerald-900' : isSkipped ? 'text-stone-500 line-through' : 'text-stone-700'
+                                    }`}>
+                                      {stageDef.label}
+                                    </span>
+                                    {isSkipped ? (
+                                      <span className="text-[10px] text-stone-400 font-mono">skipped</span>
+                                    ) : stageRec?.duration_ms ? (
+                                      <span className="text-[10px] text-stone-500 font-mono">
+                                        {stageRec.duration_ms > 1000
+                                          ? `${(stageRec.duration_ms / 1000).toFixed(1)}s`
+                                          : `${Math.round(stageRec.duration_ms)}ms`}
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                  <p className="text-[11px] text-stone-500 truncate">{stageDef.desc}</p>
+                                </div>
                               </div>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       </div>
                     )}
                   </div>
                 )}
+
+                {/* STAGE 10+: BRIEF SUMMARY vs. DETAILED REPORT TOGGLE & VISUAL OBSERVATIONS */}
+                {analysisJob?.status !== 'NO_ELIGIBLE_EVIDENCE' && (analysisJob?.artifacts?.mvp_analysis || mvpAnalysis) && (() => {
+                  const activeMvp = (analysisJob?.artifacts?.mvp_analysis || mvpAnalysis) as MVPCaseAnalysis;
+                  const briefText = activeMvp?.brief_summary || activeMvp?.preliminary_narrative || '';
+                  const detailedText = activeMvp?.preliminary_narrative || '';
+                  const visFindings = activeMvp?.visual_findings || [];
+
+                  return (
+                    <div className="border-t border-[#E6E4DF] pt-4 space-y-4">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[11px] uppercase tracking-wider text-[#0F766E] font-semibold">
+                              {reportViewMode === 'brief' ? 'Output A — Brief Summary (100–180 Words)' : 'Output B — Detailed Incident Report'}
+                            </span>
+                            {activeMvp?.vision_status_summary && (
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase ${
+                                activeMvp.vision_status_summary === 'complete'
+                                  ? 'bg-purple-100 text-purple-800 border border-purple-200'
+                                  : activeMvp.vision_status_summary === 'partial'
+                                  ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                                  : 'bg-stone-100 text-stone-600 border border-stone-200'
+                              }`}>
+                                Vision: {activeMvp.vision_status_summary}
+                              </span>
+                            )}
+                          </div>
+                          <h4 className="text-sm font-bold text-[#1C1917]">
+                            {activeMvp?.case_title}
+                          </h4>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <div className="inline-flex rounded-md border border-[#E6E4DF] bg-[#F9F9F7] p-0.5 text-xs">
+                            <button
+                              type="button"
+                              onClick={() => setReportViewMode('brief')}
+                              className={`px-2.5 py-1 rounded font-medium transition-colors ${
+                                reportViewMode === 'brief'
+                                  ? 'bg-[#0F766E] text-white shadow-xs'
+                                  : 'text-[#6B6862] hover:text-[#1C1917]'
+                              }`}
+                            >
+                              Brief Summary
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setReportViewMode('detailed')}
+                              className={`px-2.5 py-1 rounded font-medium transition-colors ${
+                                reportViewMode === 'detailed'
+                                  ? 'bg-[#0F766E] text-white shadow-xs'
+                                  : 'text-[#6B6862] hover:text-[#1C1917]'
+                              }`}
+                            >
+                              Detailed Report
+                            </button>
+                          </div>
+                          <span className="text-xs text-[#6B6862] font-mono">
+                            {reportViewMode === 'brief'
+                              ? `${activeMvp?.brief_summary_word_count || briefText.split(/\s+/).filter(Boolean).length} words`
+                              : `${activeMvp?.narrative_word_count || detailedText.split(/\s+/).filter(Boolean).length} words`}
+                          </span>
+                        </div>
+                      </div>
+
+                      {reportViewMode === 'brief' ? (
+                        <div className="bg-teal-50/40 border border-teal-200 rounded p-4 space-y-2">
+                          <p className="text-xs text-[#1C1917] leading-relaxed">
+                            {briefText}
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="space-y-4">
+                          <p className="text-xs text-[#334155] leading-relaxed whitespace-pre-wrap bg-[#F9F9F7] p-4 rounded border border-[#E6E4DF]">
+                            {detailedText}
+                          </p>
+
+                          {/* Relevant Participants */}
+                          {(activeMvp?.relevant_participants || []).length > 0 && (
+                            <div className="space-y-1.5">
+                              <h5 className="text-xs font-semibold uppercase tracking-wider text-[#6B6862]">
+                                Important Participants ({(activeMvp?.relevant_participants || []).length})
+                              </h5>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                {(activeMvp?.relevant_participants || []).map((p, pIdx) => (
+                                  <div key={pIdx} className="bg-white p-2.5 rounded border border-[#E6E4DF] text-xs">
+                                    <span className="font-bold text-[#1C1917] block">{p.name}</span>
+                                    <span className="text-[11px] text-[#6B6862]">{p.role}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Attributed Claims vs. Documented Observations */}
+                          {(activeMvp?.attributed_claims || []).length > 0 && (
+                            <div className="space-y-1.5">
+                              <h5 className="text-xs font-semibold uppercase tracking-wider text-[#6B6862]">
+                                Attributed Claims & Allegations vs. Documented Observations
+                              </h5>
+                              <div className="space-y-2">
+                                {(activeMvp?.attributed_claims || []).map((ac: any, acIdx: number) => (
+                                  <div key={acIdx} className="bg-amber-50/40 p-2.5 rounded border border-amber-200 text-xs space-y-1">
+                                    <span className="font-semibold text-amber-950 block">{ac.speaker_or_source}</span>
+                                    <p className="text-[#334155] text-[11px]">{ac.claim}</p>
+                                    <span className="text-[10px] font-mono text-amber-800 block">Status: {ac.status}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Expandable Visual Semantic Observations Panel (Qwen3-VL) */}
+                      {visFindings.length > 0 && (
+                        <div className="border border-purple-200 rounded-md bg-purple-50/20 overflow-hidden">
+                          <button
+                            type="button"
+                            onClick={() => setShowVisualObservations(!showVisualObservations)}
+                            className="w-full p-2.5 flex items-center justify-between text-xs font-semibold text-purple-950 hover:bg-purple-50/60 transition-colors"
+                          >
+                            <div className="flex items-center gap-2">
+                              <Eye className="w-3.5 h-3.5 text-purple-700" />
+                              <span>Relevant Visual Semantic Observations — Qwen3-VL ({visFindings.length} Images)</span>
+                            </div>
+                            {showVisualObservations ? <ChevronUp className="w-4 h-4 text-purple-700" /> : <ChevronDown className="w-4 h-4 text-purple-700" />}
+                          </button>
+
+                          {showVisualObservations && (
+                            <div className="p-3 border-t border-purple-200 grid grid-cols-1 gap-2.5 bg-white">
+                              {visFindings.map((vf: any, vIdx: number) => (
+                                <div key={vIdx} className="p-3 rounded border border-purple-100 bg-purple-50/20 text-xs space-y-1.5">
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <span className="font-bold text-purple-950">{vf.filename}</span>
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="px-2 py-0.5 rounded bg-purple-100 text-purple-800 font-mono text-[10px] uppercase">
+                                        {vf.content_type}
+                                      </span>
+                                      <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-mono text-[10px] uppercase">
+                                        {vf.status}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <p className="text-[#334155] text-[11px] leading-relaxed">
+                                    <strong>Visual Description:</strong> {vf.visual_description}
+                                  </p>
+                                  {(vf.meme_indicators || []).length > 0 && (
+                                    <div className="text-[11px] text-purple-900">
+                                      <strong>Meme Indicators:</strong> {(vf.meme_indicators || []).join('; ')}
+                                    </div>
+                                  )}
+                                  {(vf.social_media_context || []).length > 0 && (
+                                    <div className="text-[11px] text-[#334155]">
+                                      <strong>Platform / UI Context:</strong> {(vf.social_media_context || []).join('; ')}
+                                    </div>
+                                  )}
+                                  {(vf.text_visual_relationships || []).length > 0 && (
+                                    <div className="text-[11px] text-[#334155]">
+                                      <strong>Text-Visual Relationship:</strong> {(vf.text_visual_relationships || []).join('; ')}
+                                    </div>
+                                  )}
+                                  {(vf.uncertainties || []).length > 0 && (
+                                    <div className="text-[10px] text-amber-800 font-mono">
+                                      <strong>Visual Uncertainties:</strong> {(vf.uncertainties || []).join('; ')}
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Evidence-Backed Facts Grid */}
+                      {(activeMvp?.evidence_backed_facts || []).length > 0 && (
+                        <div className="space-y-2">
+                          <h5 className="text-xs font-semibold uppercase tracking-wider text-[#6B6862]">
+                            Key Evidence-Backed Facts ({(activeMvp?.evidence_backed_facts || []).length})
+                          </h5>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                            {(activeMvp?.evidence_backed_facts || []).map((fact: any, fIdx: number) => (
+                              <div key={fIdx} className="bg-white p-3 rounded border border-[#E6E4DF] text-xs space-y-1">
+                                <span className="font-semibold text-[#1C1917] block">{fact.topic}</span>
+                                <p className="text-[#334155] text-[11px] leading-relaxed">{fact.claim_text}</p>
+                                <div className="pt-1 text-[10px] text-[#6B6862] font-mono truncate" title={fact.citation?.verbatim_quote}>
+                                  <span className="font-semibold text-[#0F766E]">{fact.citation?.filename}:</span> "{fact.citation?.verbatim_quote}"
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {/* STAGE 12: CONTEXTUAL CLARIFICATION QUIZ (AUTOMATIC PAUSE FOR TESTIMONY) */}
                 {analysisJob && analysisJob.status === 'WAITING_FOR_USER' && quizQuestions.length > 0 && (
@@ -1376,6 +1661,62 @@ export const CaseDetails: React.FC = () => {
                 )}
               </div>
 
+              {/* Authenticity & Quarantine Stats Bar */}
+              {(() => {
+                const total = caseEvidence.length;
+                let assessed = 0;
+                let syntheticCount = 0;
+                let notDetectedCount = 0;
+                let quarantinedCount = 0;
+                let flaggedCount = 0;
+
+                caseEvidence.forEach(ev => {
+                  if (['EXCLUDED_BY_POLICY', 'EXCLUDED_PENDING_REVIEW', 'EXCLUDED_BY_INVESTIGATOR'].includes(ev.review_status || '')) quarantinedCount++;
+                  if (ev.review_status === 'FLAGGED_FOR_REVIEW') flaggedCount++;
+
+                  const rawMeta = ev.extraction_metadata;
+                  const parsed = typeof rawMeta === 'string' ? (() => { try { return JSON.parse(rawMeta); } catch { return null; } })() : rawMeta;
+                  const auth = parsed?.media_authenticity;
+                  if (auth && auth.processing_status === 'completed') {
+                    assessed++;
+                    if (auth.assessment === 'synthetic_indicators_detected') syntheticCount++;
+                    else if (auth.assessment === 'synthetic_indicators_not_detected') notDetectedCount++;
+                  }
+                });
+
+                return (
+                  <div className="bg-[#F9F9F7] border border-[#E6E4DF] rounded-md p-3 flex flex-wrap items-center justify-between gap-3 text-xs">
+                    <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-1.5 font-semibold text-[#1C1917]">
+                        <ShieldCheck className="w-4 h-4 text-[#0F766E]" />
+                        <span>Media Authenticity & Policy Inventory:</span>
+                      </div>
+                      <span className="text-[#6B6862]">
+                        Total Files: <strong>{total}</strong> | Assessed: <strong>{assessed}</strong>
+                      </span>
+                      {syntheticCount > 0 && (
+                        <span className="px-2 py-0.5 rounded bg-rose-100 text-rose-800 font-semibold text-[11px]">
+                          Synthetic: {syntheticCount}
+                        </span>
+                      )}
+                      {quarantinedCount > 0 && (
+                        <span className="px-2 py-0.5 rounded bg-rose-50 border border-rose-200 text-rose-700 font-medium text-[11px]">
+                          Quarantined: {quarantinedCount}
+                        </span>
+                      )}
+                      {flaggedCount > 0 && (
+                        <span className="px-2 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-800 font-medium text-[11px]">
+                          Flagged (Dev): {flaggedCount}
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-[11px] text-[#6B6862] font-mono">
+                      Models: Sentry ConvNeXt (Image) &bull; PellaV2 w2v-BERT-2.0 (Audio)
+                    </div>
+                  </div>
+                );
+              })()}
+
               {/* Evidence Table */}
               <div className="bg-white border border-[#E6E4DF] rounded-md overflow-hidden">
                 <table className="w-full text-left text-xs border-collapse">
@@ -1386,6 +1727,8 @@ export const CaseDetails: React.FC = () => {
                     <th className="py-2.5 px-4 font-medium">Size</th>
                     <th className="py-2.5 px-4 font-medium">SHA-256</th>
                     <th className="py-2.5 px-4 font-medium">Extraction Status</th>
+                    <th className="py-2.5 px-4 font-medium">Authenticity</th>
+                    <th className="py-2.5 px-4 font-medium">Policy Status</th>
                     <th className="py-2.5 px-4 font-medium text-right">Actions</th>
                   </tr>
                 </thead>
@@ -1450,6 +1793,89 @@ export const CaseDetails: React.FC = () => {
                               <span>Extract</span>
                             </button>
                           )}
+                        </td>
+
+                        {/* Authenticity Assessment */}
+                        <td className="py-3 px-4">
+                          {(() => {
+                            const rawMeta = file.extraction_metadata;
+                            const parsedMeta = typeof rawMeta === 'string'
+                              ? (() => { try { return JSON.parse(rawMeta); } catch { return null; } })()
+                              : rawMeta;
+                            const auth = parsedMeta?.media_authenticity;
+
+                            if (!auth) {
+                              if (['image', 'audio'].includes(file.file_type?.toLowerCase() || '')) {
+                                return <span className="text-[11px] text-stone-400">Pending</span>;
+                              }
+                              return <span className="text-[11px] text-stone-400">N/A (doc)</span>;
+                            }
+
+                            const isSynthetic = auth.assessment === 'synthetic_indicators_detected';
+                            const isNotDetected = auth.assessment === 'synthetic_indicators_not_detected';
+                            const isSkipped = auth.processing_status === 'skipped';
+                            const score = auth.raw_score !== null && auth.raw_score !== undefined ? `${(auth.raw_score * 100).toFixed(1)}%` : null;
+
+                            return (
+                              <button
+                                onClick={() => setViewingEvidence(file)}
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium border transition-colors ${
+                                  isSynthetic
+                                    ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
+                                    : isNotDetected
+                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                                    : isSkipped
+                                    ? 'bg-stone-50 text-stone-600 border-stone-200 hover:bg-stone-100'
+                                    : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
+                                }`}
+                                title={auth.score_interpretation || "Click to view authenticity details"}
+                              >
+                                <ShieldCheck className={`w-3 h-3 ${isSynthetic ? 'text-rose-600' : isNotDetected ? 'text-emerald-600' : 'text-stone-500'}`} />
+                                <span>{isSynthetic ? 'Synthetic' : isNotDetected ? 'Not Detected' : isSkipped ? 'Skipped' : 'Inconclusive'}</span>
+                                {score && <span className="font-mono text-[10px] opacity-80">({score})</span>}
+                              </button>
+                            );
+                          })()}
+                        </td>
+
+                        {/* Policy Status & Quarantine Override */}
+                        <td className="py-3 px-4">
+                          {(() => {
+                            const isExcluded = ['EXCLUDED_BY_POLICY', 'EXCLUDED_PENDING_REVIEW', 'EXCLUDED_BY_INVESTIGATOR'].includes(file.review_status || '');
+                            const isFlagged = file.review_status === 'FLAGGED_FOR_REVIEW';
+                            const isRestored = file.review_status === 'RESTORED_BY_INVESTIGATOR';
+
+                            return (
+                              <div className="flex items-center gap-1.5">
+                                <span
+                                  className={`px-2 py-0.5 rounded text-[11px] font-semibold border ${
+                                    isExcluded
+                                      ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                      : isFlagged
+                                      ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                      : isRestored
+                                      ? 'bg-blue-50 text-blue-800 border-blue-200'
+                                      : 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                  }`}
+                                  title={file.quarantine_reason || (isExcluded ? 'Quarantined from reconstruction' : 'Eligible for reconstruction')}
+                                >
+                                  {isExcluded ? 'Quarantined' : isFlagged ? 'Flagged (Dev)' : isRestored ? 'Restored' : 'Included'}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleQuarantine(file)}
+                                  className={`px-1.5 py-0.5 rounded text-[10px] font-medium border transition-colors ${
+                                    isExcluded
+                                      ? 'bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100'
+                                      : 'bg-stone-50 text-stone-600 border-stone-300 hover:bg-rose-50 hover:text-rose-700 hover:border-rose-300'
+                                  }`}
+                                  title={isExcluded ? 'Restore to active reconstruction' : 'Exclude/quarantine from active reconstruction'}
+                                >
+                                  {isExcluded ? 'Restore' : 'Exclude'}
+                                </button>
+                              </div>
+                            );
+                          })()}
                         </td>
 
                         {/* Actions */}
@@ -2700,7 +3126,28 @@ export const CaseDetails: React.FC = () => {
             </div>
           </div>
 
-          {isLoadingReport ? (
+          {analysisJob?.status === 'NO_ELIGIBLE_EVIDENCE' ? (
+            <div className="bg-rose-50 border border-rose-300 rounded-md p-8 text-center max-w-xl mx-auto my-6 space-y-3">
+              <AlertTriangle className="w-10 h-10 text-rose-600 mx-auto" />
+              <h3 className="text-sm font-bold text-rose-900">Incident Report Suppressed</h3>
+              <p className="text-xs text-rose-700 leading-relaxed">
+                All evidence items associated with this case were classified as synthetic and quarantined under <strong>Strict Review Mode</strong>. In accordance with digital forensics integrity standards, report generation is halted until authentic evidence is supplied or manual overrides are applied.
+              </p>
+              <div className="pt-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    setPolicyMode('DEVELOPMENT');
+                    setActiveTab('evidence');
+                  }}
+                  className="bg-white border-rose-300 text-rose-800 hover:bg-rose-100"
+                >
+                  Switch to Development Mode & Re-Analyze
+                </Button>
+              </div>
+            </div>
+          ) : isLoadingReport ? (
             <div className="py-12 text-center text-xs text-[#6B6862]">Synthesizing forensic report...</div>
           ) : !reportData ? (
             <div className="bg-white border border-[#E6E4DF] rounded-md p-10 text-center max-w-md mx-auto my-6">
@@ -2721,17 +3168,70 @@ export const CaseDetails: React.FC = () => {
           ) : (
             <div className="bg-white border border-[#E6E4DF] rounded-md p-6 space-y-6">
               {/* Executive Overview */}
-              <div className="border-b border-[#E6E4DF] pb-4">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-base font-semibold text-[#1C1917]">Executive Incident Overview</h4>
-                  <span className="text-xs text-[#6B6862]">
-                    Report ID: <span className="font-mono">{reportData.id.substring(0, 8)}...</span>
-                  </span>
+              <div className="border-b border-[#E6E4DF] pb-4 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h4 className="text-base font-semibold text-[#1C1917]">Executive Incident Overview</h4>
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                      (reportData.report_data?.policy_mode || policyMode) === 'STRICT_REVIEW'
+                        ? 'bg-rose-100 text-rose-800 border border-rose-200'
+                        : 'bg-stone-100 text-stone-700 border border-stone-200'
+                    }`}>
+                      Policy: {reportData.report_data?.policy_mode || policyMode}
+                    </span>
+                  </div>
+                  <p className="text-xs text-[#6B6862] mt-1">
+                    Synthesized on {new Date(reportData.created_at).toLocaleString()} • Report ID: <span className="font-mono">{reportData.id.substring(0, 8)}...</span>
+                  </p>
                 </div>
-                <p className="text-xs text-[#6B6862] mt-1">
-                  Synthesized on {new Date(reportData.created_at).toLocaleString()}
-                </p>
+                <div className="inline-flex rounded border border-[#E6E4DF] bg-[#F9F9F7] p-0.5 text-[11px]">
+                  <button
+                    type="button"
+                    onClick={() => setReportViewMode('brief')}
+                    className={`px-2.5 py-1 rounded font-medium transition-colors ${
+                      reportViewMode === 'brief'
+                        ? 'bg-[#0F766E] text-white shadow-xs'
+                        : 'text-[#6B6862] hover:text-[#1C1917]'
+                    }`}
+                  >
+                    Output A: Brief Summary
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setReportViewMode('detailed')}
+                    className={`px-2.5 py-1 rounded font-medium transition-colors ${
+                      reportViewMode === 'detailed'
+                        ? 'bg-[#0F766E] text-white shadow-xs'
+                        : 'text-[#6B6862] hover:text-[#1C1917]'
+                    }`}
+                  >
+                    Output B: Detailed Report
+                  </button>
+                </div>
               </div>
+
+              {/* Output A: Brief Summary Banner */}
+              {(reportViewMode === 'brief' || reportData.report_data?.brief_summary) && (
+                <div className={`p-4 rounded-md border ${
+                  reportViewMode === 'brief'
+                    ? 'bg-teal-50/40 border-teal-200'
+                    : 'bg-[#F9F9F7] border-[#E6E4DF]'
+                }`}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-xs font-semibold uppercase tracking-wider text-[#0F766E]">
+                      Output A — Brief Incident Summary (100–180 Words)
+                    </span>
+                    {reportData.report_data?.vision_status_summary?.images_completed > 0 && (
+                      <span className="px-2 py-0.5 rounded bg-indigo-100 text-indigo-800 font-medium text-[10px]">
+                        Qwen3-VL Enhanced ({reportData.report_data.vision_status_summary.images_completed} images)
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-sm text-[#1C1917] leading-relaxed">
+                    {reportData.report_data?.brief_summary || mvpAnalysis?.brief_summary || reportData.report_data?.what_happened}
+                  </p>
+                </div>
+              )}
 
               {/* Statistics Grid */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -2775,29 +3275,58 @@ export const CaseDetails: React.FC = () => {
               )}
 
               {/* SECTION A: What Appears to Have Happened */}
-              <div className="space-y-3">
-                <div className="flex items-center gap-2 border-b border-[#E6E4DF] pb-2">
-                  <span className="w-6 h-6 rounded-full bg-teal-100 text-[#0F766E] font-bold text-xs flex items-center justify-center">A</span>
-                  <h5 className="text-sm font-semibold text-[#1C1917]">
-                    What Appears to Have Happened?
-                  </h5>
-                </div>
-                <div className="bg-white border border-[#E6E4DF] p-4 rounded-md text-xs text-[#1C1917] leading-relaxed whitespace-pre-wrap">
-                  {reportData.report_data?.what_happened || reportData.report_data?.incident_narrative || reportData.report_data?.case_overview}
-                </div>
+              {reportViewMode === 'detailed' && (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 border-b border-[#E6E4DF] pb-2">
+                    <span className="w-6 h-6 rounded-full bg-teal-100 text-[#0F766E] font-bold text-xs flex items-center justify-center">A</span>
+                    <h5 className="text-sm font-semibold text-[#1C1917]">
+                      What Appears to Have Happened?
+                    </h5>
+                  </div>
+                  <div className="bg-white border border-[#E6E4DF] p-4 rounded-md text-xs text-[#1C1917] leading-relaxed whitespace-pre-wrap">
+                    {reportData.report_data?.what_happened || reportData.report_data?.incident_narrative || reportData.report_data?.case_overview}
+                  </div>
 
-                {/* Subsections if available */}
-                {reportData.report_data?.dispute_development_sections?.length > 0 && (
-                  <div className="space-y-2 mt-2">
-                    {reportData.report_data.dispute_development_sections.map((sec: any, sIdx: number) => (
-                      <div key={sIdx} className="bg-[#F9F9F7] p-3 rounded border border-[#E6E4DF] text-xs">
-                        <span className="font-semibold text-[#1C1917] block mb-1">{sec.heading}</span>
-                        <p className="text-[#334155] leading-relaxed whitespace-pre-wrap">{sec.content}</p>
+                  {/* Subsections if available */}
+                  {reportData.report_data?.dispute_development_sections?.length > 0 && (
+                    <div className="space-y-2 mt-2">
+                      {reportData.report_data.dispute_development_sections.map((sec: any, sIdx: number) => (
+                        <div key={sIdx} className="bg-[#F9F9F7] p-3 rounded border border-[#E6E4DF] text-xs">
+                          <span className="font-semibold text-[#1C1917] block mb-1">{sec.heading}</span>
+                          <p className="text-[#334155] leading-relaxed whitespace-pre-wrap">{sec.content}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Relevant Visual Observations (Qwen3-VL) */}
+              {reportViewMode === 'detailed' && reportData.report_data?.visual_findings?.length > 0 && (
+                <div className="space-y-2">
+                  <h5 className="text-xs font-semibold uppercase tracking-wider text-indigo-900">
+                    Relevant Visual Observations (Qwen3-VL Semantic Vision)
+                  </h5>
+                  <div className="grid grid-cols-1 gap-2">
+                    {reportData.report_data.visual_findings.map((vf: any, vIdx: number) => (
+                      <div key={vIdx} className="bg-indigo-50/40 p-3 rounded border border-indigo-200/80 text-xs space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="font-semibold text-indigo-950">{vf.filename}</span>
+                          <span className="px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-800 text-[10px] font-mono">
+                            {vf.visual_category} • {Math.round((vf.confidence ?? 0) * 100)}%
+                          </span>
+                        </div>
+                        <p className="text-[#1C1917]">{vf.scene_summary}</p>
+                        {vf.case_relevance && (
+                          <p className="text-[11px] text-indigo-900">
+                            <strong>Case Relevance:</strong> {vf.case_relevance}
+                          </p>
+                        )}
                       </div>
                     ))}
                   </div>
-                )}
-              </div>
+                </div>
+              )}
 
               {/* Key Financial Findings if available */}
               {reportData.report_data?.financial_document_findings && Object.keys(reportData.report_data.financial_document_findings).length > 0 && (
@@ -3023,6 +3552,154 @@ export const CaseDetails: React.FC = () => {
                 {viewingEvidence.extracted_text || 'No text extracted from this file.'}
               </div>
             </div>
+
+            {/* Semantic Visual Observations (Qwen3-VL) */}
+            {(() => {
+              const rawMeta = viewingEvidence.extraction_metadata;
+              const parsedMeta = typeof rawMeta === 'string'
+                ? (() => { try { return JSON.parse(rawMeta); } catch { return null; } })()
+                : rawMeta;
+              const sv = parsedMeta?.semantic_vision;
+              if (!sv) return null;
+              return (
+                <div className="space-y-2 p-3 rounded border border-indigo-200 bg-indigo-50/40 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-indigo-950">
+                      Semantic Visual Observations (Qwen3-VL)
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-indigo-100 text-indigo-800 text-[10px] font-mono">
+                      {sv.visual_category} • {Math.round((sv.confidence ?? 0) * 100)}%
+                    </span>
+                  </div>
+                  {sv.scene_summary && (
+                    <p className="text-[#1C1917] leading-relaxed">
+                      <strong>Scene Summary:</strong> {sv.scene_summary}
+                    </p>
+                  )}
+                  {sv.case_relevance && (
+                    <p className="text-indigo-900">
+                      <strong>Case Relevance:</strong> {sv.case_relevance}
+                    </p>
+                  )}
+                  {sv.key_visual_facts?.length ? (
+                    <div>
+                      <strong className="text-indigo-950 block mb-0.5">Key Visual Facts:</strong>
+                      <ul className="list-disc list-inside space-y-0.5 text-[#334155]">
+                        {sv.key_visual_facts.map((fact: string, fIdx: number) => (
+                          <li key={fIdx}>{fact}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })()}
+
+            {/* Media Authenticity & Deepfake Assessment (Sentry & PellaV2) */}
+            {(() => {
+              const rawMeta = viewingEvidence.extraction_metadata;
+              const parsedMeta = typeof rawMeta === 'string'
+                ? (() => { try { return JSON.parse(rawMeta); } catch { return null; } })()
+                : rawMeta;
+              const auth = parsedMeta?.media_authenticity;
+              if (!auth) return null;
+
+              const isSynthetic = auth.assessment === 'synthetic_indicators_detected';
+              const isNotDetected = auth.assessment === 'synthetic_indicators_not_detected';
+              const isSkipped = auth.processing_status === 'skipped';
+              const prov = auth.provenance || {};
+
+              return (
+                <div className={`space-y-2 p-3 rounded border text-xs ${
+                  isSynthetic
+                    ? 'border-rose-300 bg-rose-50/50'
+                    : isNotDetected
+                    ? 'border-emerald-300 bg-emerald-50/40'
+                    : isSkipped
+                    ? 'border-stone-200 bg-stone-50'
+                    : 'border-amber-300 bg-amber-50/50'
+                }`}>
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-[#1C1917] flex items-center gap-1.5">
+                      <ShieldCheck className={`w-4 h-4 ${isSynthetic ? 'text-rose-600' : isNotDetected ? 'text-emerald-600' : 'text-stone-500'}`} />
+                      Media Authenticity Assessment ({auth.model_identifier || 'Detector'})
+                    </span>
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
+                      isSynthetic
+                        ? 'bg-rose-100 text-rose-800'
+                        : isNotDetected
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : isSkipped
+                        ? 'bg-stone-200 text-stone-700'
+                        : 'bg-amber-100 text-amber-800'
+                    }`}>
+                      {isSynthetic ? 'SYNTHETIC DETECTED' : isNotDetected ? 'NOT DETECTED' : isSkipped ? 'SKIPPED' : 'INCONCLUSIVE'}
+                    </span>
+                  </div>
+
+                  {auth.raw_score !== null && auth.raw_score !== undefined && (
+                    <div className="flex items-center gap-3 text-stone-700">
+                      <div>
+                        <strong>Raw Score:</strong> <span className="font-mono">{auth.raw_score.toFixed(4)}</span> ({(auth.raw_score * 100).toFixed(1)}%)
+                      </div>
+                      {auth.inference_time_ms && (
+                        <div>
+                          <strong>Latency:</strong> <span className="font-mono">{Math.round(auth.inference_time_ms)}ms</span>
+                        </div>
+                      )}
+                      <div>
+                        <strong>Device:</strong> <span className="font-mono uppercase">{auth.device_used || 'CPU'}</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {auth.score_interpretation && (
+                    <p className="text-[#1C1917] leading-relaxed">
+                      <strong>Interpretation:</strong> {auth.score_interpretation}
+                    </p>
+                  )}
+
+                  {/* Audio multi-window stats */}
+                  {auth.audio_duration_analyzed_sec !== undefined && (
+                    <div className="p-2 rounded bg-white/70 border border-stone-200 text-[11px] space-y-1">
+                      <div className="font-semibold text-stone-800">Multi-Window Speech Analysis:</div>
+                      <div className="text-stone-600">
+                        Coverage: <strong>{auth.coverage_percentage?.toFixed(0)}%</strong> ({auth.audio_duration_analyzed_sec}s of {auth.audio_duration_total_sec}s) across <strong>{auth.num_windows_analyzed}</strong> window(s) (4.0s windows with stride).
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Cryptographic Provenance */}
+                  {prov && (
+                    <div className="p-2 rounded bg-white/70 border border-stone-200 text-[11px] space-y-1">
+                      <div className="font-semibold text-stone-800 flex items-center justify-between">
+                        <span>Cryptographic Provenance Audit:</span>
+                        <span className="font-mono text-[10px] uppercase text-stone-500">{prov.classification?.replace(/_/g, ' ')}</span>
+                      </div>
+                      <div className="text-stone-600">
+                        C2PA JUMBF Manifest: <strong>{prov.has_c2pa_manifest ? 'Verified Present' : 'Not Present'}</strong> |
+                        Digital Signature: <strong>{prov.has_cryptographic_signature ? 'Signed' : 'Unsigned'}</strong>
+                      </div>
+                      {prov.software_agent && (
+                        <div className="text-stone-600">
+                          Software / Generator: <span className="font-mono">{prov.software_agent}</span>
+                        </div>
+                      )}
+                      {prov.creation_timestamp && (
+                        <div className="text-stone-600">
+                          Original Timestamp: <span className="font-mono">{prov.creation_timestamp}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Limitations & Forensic Non-Suppression Rule */}
+                  <div className="text-[10px] text-stone-500 leading-normal pt-1 border-t border-stone-200/60">
+                    <em>Forensic Rule:</em> Synthetic screening warnings evaluate acoustic/visual generation artifacts; they do not reject or delete evidence items. Missing provenance metadata is not proof of tampering.
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Re-run button */}
             <div className="flex justify-end gap-2 pt-2 border-t border-[#E6E4DF]">

@@ -1218,10 +1218,43 @@ def get_case_understanding(case_id: str, db: Session = Depends(get_db)):
     from src.intelligence.evidence_reasoner import ContradictionRecord
     from src.intelligence.clarification_engine import generate_preliminary_case_understanding
 
+    case = db.query(Case).filter(Case.id == case_id).first()
+    if not case:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Case {case_id} not found.")
+
     evidence_records = db.query(Evidence).filter(Evidence.case_id == case_id).all()
     event_records = db.query(EventRecord).filter(EventRecord.case_id == case_id).all()
     contra_records = db.query(EventContradictionRecord).filter(EventContradictionRecord.case_id == case_id).all()
     entity_records = db.query(EntityMatchRecord).filter(EntityMatchRecord.case_id == case_id).all()
+
+    # If there are no evidence files or extracted events, return an empty pending-state response
+    if not evidence_records and not event_records:
+        return PreliminaryCaseUnderstandingResponse(
+            case_id=case_id,
+            narrative_summary="No evidence files or extracted events have been processed for this case yet.",
+            key_parties=[],
+            established_facts=[],
+            proposed_or_planned=[],
+            claims_and_allegations=[],
+            unclear_or_disputed=[],
+            evidence_sources=[],
+        )
+
+    def _safe_json_list(val: Any) -> list:
+        if not val:
+            return []
+        if isinstance(val, list):
+            return val
+        if isinstance(val, str):
+            val_s = val.strip()
+            if val_s.startswith("[") and val_s.endswith("]"):
+                try:
+                    parsed = json.loads(val_s)
+                    if isinstance(parsed, list):
+                        return parsed
+                except Exception:
+                    pass
+        return []
 
     events = [
         EventCandidate(
@@ -1230,10 +1263,10 @@ def get_case_understanding(case_id: str, db: Session = Depends(get_db)):
             event_type=r.event_type,
             title=r.title,
             description=r.description,
-            actors=json.loads(r.actors_json) if r.actors_json else [],
+            actors=_safe_json_list(r.actors_json),
             action=r.action,
             original_time_expression=r.original_time_expression,
-            evidence_ids=json.loads(r.evidence_ids_json) if r.evidence_ids_json else [],
+            evidence_ids=_safe_json_list(r.evidence_ids_json),
             modality=r.modality,
             activity_name=getattr(r, "activity_name", "") or r.title,
             event_status=getattr(r, "event_status", "observed") or "observed",
@@ -1250,35 +1283,48 @@ def get_case_understanding(case_id: str, db: Session = Depends(get_db)):
             case_id=c.case_id,
             contradiction_type=c.contradiction_type,
             description=c.description,
-            event_ids=json.loads(c.event_ids_json) if c.event_ids_json else [],
-            evidence_ids=json.loads(c.evidence_ids_json) if c.evidence_ids_json else [],
+            event_ids=_safe_json_list(c.event_ids_json),
+            evidence_ids=_safe_json_list(c.evidence_ids_json),
             statement_a=c.statement_a,
             statement_b=c.statement_b,
             source_a=c.source_a,
             source_b=c.source_b,
             unresolved_question=c.unresolved_question,
-            severity=c.severity,
+            resolution_status=getattr(c, "resolution_status", "unresolved") or "unresolved",
         )
         for c in contra_records
     ]
 
-    understanding = generate_preliminary_case_understanding(
-        case_id=case_id,
-        evidence_files=evidence_records,
-        events=events,
-        contradictions=contradictions,
-        entities=entity_records,
-    )
-    return PreliminaryCaseUnderstandingResponse(
-        case_id=understanding.case_id,
-        narrative_summary=understanding.narrative_summary,
-        key_parties=understanding.key_parties,
-        established_facts=understanding.established_facts,
-        proposed_or_planned=understanding.proposed_or_planned,
-        claims_and_allegations=understanding.claims_and_allegations,
-        unclear_or_disputed=understanding.unclear_or_disputed,
-        evidence_sources=understanding.evidence_sources,
-    )
+    try:
+        understanding = generate_preliminary_case_understanding(
+            case_id=case_id,
+            evidence_files=evidence_records,
+            events=events,
+            contradictions=contradictions,
+            entities=entity_records,
+        )
+        return PreliminaryCaseUnderstandingResponse(
+            case_id=understanding.case_id,
+            narrative_summary=understanding.narrative_summary or "",
+            key_parties=understanding.key_parties or [],
+            established_facts=understanding.established_facts or [],
+            proposed_or_planned=understanding.proposed_or_planned or [],
+            claims_and_allegations=understanding.claims_and_allegations or [],
+            unclear_or_disputed=understanding.unclear_or_disputed or [],
+            evidence_sources=understanding.evidence_sources or [],
+        )
+    except Exception as exc:
+        logger.error(f"Error generating case understanding for case {case_id}: {exc}", exc_info=True)
+        return PreliminaryCaseUnderstandingResponse(
+            case_id=case_id,
+            narrative_summary="Preliminary case understanding is pending or being processed.",
+            key_parties=[],
+            established_facts=[],
+            proposed_or_planned=[],
+            claims_and_allegations=[],
+            unclear_or_disputed=[],
+            evidence_sources=[],
+        )
 
 
 @router.post("/cases/{case_id}/analysis/sync-mvp", response_model=MVPCaseAnalysisResponse)
@@ -1339,10 +1385,18 @@ def analyze_case_endpoint(case_id: str, db: Session = Depends(get_db)):
         case_id=analysis.case_id,
         case_title=analysis.case_title,
         case_domain=analysis.case_domain,
+        brief_summary=analysis.brief_summary,
+        brief_summary_word_count=analysis.brief_summary_word_count,
         preliminary_narrative=analysis.preliminary_narrative,
         narrative_word_count=analysis.narrative_word_count,
         evidence_backed_facts=[f.model_dump() for f in analysis.evidence_backed_facts],
         unresolved_questions=[q.model_dump() for q in analysis.unresolved_questions],
+        relevant_participants=analysis.relevant_participants,
+        visual_findings=analysis.visual_findings,
+        significant_communications=analysis.significant_communications,
+        attributed_claims=analysis.attributed_claims,
+        vision_enabled=analysis.vision_enabled,
+        vision_status_summary=analysis.vision_status_summary,
         timeline_status=analysis.timeline_status,
         scheduled_events_count=analysis.scheduled_events_count,
         unscheduled_events_count=analysis.unscheduled_events_count,
@@ -1354,6 +1408,19 @@ def analyze_case_endpoint(case_id: str, db: Session = Depends(get_db)):
 @router.get("/cases/{case_id}/analysis", response_model=MVPCaseAnalysisResponse)
 def get_case_analysis_endpoint(case_id: str, db: Session = Depends(get_db)):
     """Returns stored MVP case analysis or generates one on-demand."""
+    from backend.models import AnalysisJobRecord
+    active_job = (
+        db.query(AnalysisJobRecord)
+        .filter(AnalysisJobRecord.case_id == case_id)
+        .order_by(AnalysisJobRecord.created_at.desc())
+        .first()
+    )
+    if active_job and active_job.status == "NO_ELIGIBLE_EVIDENCE":
+        raise HTTPException(
+            status_code=404,
+            detail="No case analysis available: all evidence items were quarantined under the active evidence policy."
+        )
+
     mvp_rec = db.query(MVPAnalysisRecord).filter(MVPAnalysisRecord.case_id == case_id).order_by(MVPAnalysisRecord.created_at.desc()).first()
     if not mvp_rec:
         return analyze_case_endpoint(case_id, db)
@@ -1364,10 +1431,20 @@ def get_case_analysis_endpoint(case_id: str, db: Session = Depends(get_db)):
         case_id=data.get("case_id", case_id),
         case_title=data.get("case_title", "Case Analysis"),
         case_domain=data.get("case_domain", "general_investigation"),
+        brief_summary=data.get("brief_summary", ""),
+        brief_summary_word_count=data.get("brief_summary_word_count", 0),
         preliminary_narrative=data.get("preliminary_narrative", ""),
         narrative_word_count=data.get("narrative_word_count", 0),
         evidence_backed_facts=data.get("evidence_backed_facts", []),
         unresolved_questions=data.get("unresolved_questions", []),
+        relevant_participants=data.get("relevant_participants", []),
+        visual_findings=data.get("visual_findings", []),
+        significant_communications=data.get("significant_communications", []),
+        attributed_claims=data.get("attributed_claims", []),
+        vision_enabled=data.get("vision_enabled", True),
+        vision_status_summary=data.get("vision_status_summary", "not_applicable"),
+        authenticity_assessments=data.get("authenticity_assessments", []),
+        authenticity_status_summary=data.get("authenticity_status_summary", "not_applicable"),
         timeline_status=data.get("timeline_status", "available"),
         scheduled_events_count=data.get("scheduled_events_count", 0),
         unscheduled_events_count=data.get("unscheduled_events_count", 0),
@@ -1467,6 +1544,7 @@ def generate_case_report(case_id: str, db: Session = Depends(get_db)):
             "size_bytes": ev.size_bytes,
             "extraction_confidence": ev.extraction_confidence,
             "extracted_text": ev.extracted_text,
+            "extraction_metadata": ev.extraction_metadata,
         }
         for ev in evidence_items
     ]
@@ -1596,6 +1674,19 @@ def generate_case_report(case_id: str, db: Session = Depends(get_db)):
 @router.get("/cases/{case_id}/report", response_model=ReportResponse)
 def get_case_report(case_id: str, db: Session = Depends(get_db)):
     """Returns the latest reconstructed forensic incident report for a case."""
+    from backend.models import AnalysisJobRecord
+    active_job = (
+        db.query(AnalysisJobRecord)
+        .filter(AnalysisJobRecord.case_id == case_id)
+        .order_by(AnalysisJobRecord.created_at.desc())
+        .first()
+    )
+    if active_job and active_job.status == "NO_ELIGIBLE_EVIDENCE":
+        raise HTTPException(
+            status_code=404,
+            detail="No report available: all evidence items were quarantined under the active evidence policy."
+        )
+
     report_rec = (
         db.query(ReconstructedReportRecord)
         .filter(ReconstructedReportRecord.case_id == case_id)
@@ -1617,6 +1708,19 @@ def get_case_report(case_id: str, db: Session = Depends(get_db)):
 @router.get("/cases/{case_id}/report/html", response_class=HTMLResponse)
 def get_case_report_html(case_id: str, db: Session = Depends(get_db)):
     """Returns the printable HTML incident report view for browser viewing or saving as PDF."""
+    from backend.models import AnalysisJobRecord
+    active_job = (
+        db.query(AnalysisJobRecord)
+        .filter(AnalysisJobRecord.case_id == case_id)
+        .order_by(AnalysisJobRecord.created_at.desc())
+        .first()
+    )
+    if active_job and active_job.status == "NO_ELIGIBLE_EVIDENCE":
+        raise HTTPException(
+            status_code=404,
+            detail="No report available: all evidence items were quarantined under the active evidence policy."
+        )
+
     report_rec = (
         db.query(ReconstructedReportRecord)
         .filter(ReconstructedReportRecord.case_id == case_id)
@@ -1633,6 +1737,16 @@ def get_case_report_html(case_id: str, db: Session = Depends(get_db)):
 # ONE-CLICK END-TO-END ANALYSIS JOB CONTROL ENDPOINTS
 # =========================================================================
 
+class StartAnalysisPayload(BaseModel):
+    policy_mode: Optional[str] = "DEVELOPMENT"
+    force_reanalysis: Optional[bool] = False
+
+
+class QuarantineEvidencePayload(BaseModel):
+    review_status: str
+    reason: Optional[str] = None
+
+
 class QuizSubmissionPayload(BaseModel):
     answers: Optional[List[SubmitAnswerPayload]] = None
     question_id: Optional[str] = None
@@ -1642,11 +1756,68 @@ class QuizSubmissionPayload(BaseModel):
     knowledge_basis: str = "Not specified"
 
 
+@router.post("/cases/{case_id}/evidence/{evidence_id}/quarantine", response_model=EvidenceResponse)
+def update_evidence_quarantine_endpoint(
+    case_id: str,
+    evidence_id: str,
+    payload: QuarantineEvidencePayload,
+    db: Session = Depends(get_db)
+):
+    """
+    Manually update evidence review status (quarantine override or restore).
+    Records append-only forensic audit trail.
+    """
+    valid_statuses = {
+        "EXCLUDED_BY_INVESTIGATOR",
+        "RESTORED_BY_INVESTIGATOR",
+        "INCLUDED",
+        "FLAGGED_FOR_REVIEW",
+        "EXCLUDED_BY_POLICY",
+    }
+    if payload.review_status not in valid_statuses:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid review_status '{payload.review_status}'. Allowed: {sorted(list(valid_statuses))}",
+        )
+
+    ev = db.query(Evidence).filter(Evidence.id == evidence_id, Evidence.case_id == case_id).first()
+    if not ev:
+        raise HTTPException(status_code=404, detail="Evidence not found for this case.")
+
+    ev.review_status = payload.review_status
+    if payload.reason:
+        ev.quarantine_reason = payload.reason
+    elif payload.review_status == "RESTORED_BY_INVESTIGATOR":
+        ev.quarantine_reason = "Manually restored by investigator override."
+    elif payload.review_status == "EXCLUDED_BY_INVESTIGATOR":
+        ev.quarantine_reason = "Manually excluded by investigator override."
+
+    audit_entry = AuditLog(
+        id=str(uuid.uuid4()),
+        case_id=case_id,
+        evidence_id=evidence_id,
+        action="EVIDENCE_QUARANTINE_UPDATED",
+        details=json.dumps({
+            "review_status": payload.review_status,
+            "reason": ev.quarantine_reason,
+        }),
+    )
+    db.add(audit_entry)
+    db.commit()
+    db.refresh(ev)
+    return ev
+
+
 @router.post("/cases/{case_id}/analyze")
-def start_case_analysis_endpoint(case_id: str, db: Session = Depends(get_db)):
+def start_case_analysis_endpoint(
+    case_id: str,
+    payload: Optional[StartAnalysisPayload] = None,
+    db: Session = Depends(get_db)
+):
     """
     Trigger the one-click end-to-end investigative analysis pipeline.
-    Creates a persistent job tracking 15 discrete stages and starts execution.
+    Creates a persistent job tracking 18 discrete stages and starts execution.
+    Supports configurable policy_mode: 'DEVELOPMENT' (default) or 'STRICT_REVIEW'.
     """
     from backend.services.analysis_orchestrator import (
         create_analysis_job, start_orchestrated_analysis, get_job_with_stages
@@ -1659,7 +1830,9 @@ def start_case_analysis_endpoint(case_id: str, db: Session = Depends(get_db)):
     if evidence_count == 0:
         raise HTTPException(status_code=400, detail="Cannot analyze case with zero evidence items.")
 
-    job = create_analysis_job(case_id)
+    policy_mode = (payload.policy_mode if payload and payload.policy_mode else "DEVELOPMENT").upper()
+    force_reanalysis = payload.force_reanalysis if payload and payload.force_reanalysis is not None else False
+    job = create_analysis_job(case_id, policy_mode=policy_mode, force_reanalysis=force_reanalysis)
     if job.status in ["PENDING"]:
         start_orchestrated_analysis(job.id)
 

@@ -30,6 +30,8 @@ class Evidence(Base):
     notes = Column(Text, nullable=True)
     authenticity_passed = Column(Boolean, default=True, nullable=False)
     authenticity_score = Column(Float, nullable=True)
+    review_status = Column(String(32), default="INCLUDED", nullable=False)
+    quarantine_reason = Column(Text, nullable=True)
     uploaded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     extracted_text = Column(Text, nullable=True)
     extraction_confidence = Column(Float, nullable=True)
@@ -190,6 +192,8 @@ class AnalysisJobRecord(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     case_id = Column(String(36), ForeignKey("cases.id"), nullable=False, index=True)
     pipeline_version = Column(String(32), default="2.0.0", nullable=False)
+    policy_mode = Column(String(32), default="DEVELOPMENT", nullable=False)  # DEVELOPMENT | STRICT_REVIEW
+    policy_version = Column(String(16), default="1.0.0", nullable=False)
     status = Column(String(32), default="PENDING", nullable=False, index=True)  # PENDING | RUNNING | WAITING_FOR_USER | COMPLETED | FAILED
     current_stage = Column(String(64), default="VALIDATE_EVIDENCE", nullable=False)
     evidence_hashes_json = Column(Text, default="[]", nullable=False)
@@ -234,6 +238,8 @@ class EvidenceResponse(BaseModel):
     notes: Optional[str] = None
     authenticity_passed: bool
     authenticity_score: Optional[float] = None
+    review_status: str = "INCLUDED"
+    quarantine_reason: Optional[str] = None
     uploaded_at: datetime
     extracted_text: Optional[str] = None
     extraction_confidence: Optional[float] = None
@@ -430,10 +436,20 @@ class MVPCaseAnalysisResponse(BaseModel):
     case_id: str
     case_title: str
     case_domain: str
+    brief_summary: str = ""
+    brief_summary_word_count: int = 0
     preliminary_narrative: str
     narrative_word_count: int
     evidence_backed_facts: List[Dict[str, Any]]
     unresolved_questions: List[Dict[str, Any]]
+    relevant_participants: List[Dict[str, str]] = Field(default_factory=list)
+    visual_findings: List[Dict[str, Any]] = Field(default_factory=list)
+    significant_communications: List[Dict[str, Any]] = Field(default_factory=list)
+    attributed_claims: List[Dict[str, Any]] = Field(default_factory=list)
+    vision_enabled: bool = True
+    vision_status_summary: str = "not_applicable"
+    authenticity_assessments: List[Dict[str, Any]] = Field(default_factory=list)
+    authenticity_status_summary: str = "not_applicable"
     timeline_status: str
     scheduled_events_count: int
     unscheduled_events_count: int
@@ -458,6 +474,8 @@ class AnalysisJobResponse(BaseModel):
     id: str
     case_id: str
     pipeline_version: str
+    policy_mode: str = "DEVELOPMENT"
+    policy_version: str = "1.0.0"
     status: str
     current_stage: str
     progress_percentage: int

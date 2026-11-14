@@ -23,7 +23,8 @@ export interface ApiAnalysisJob {
   id: string;
   case_id: string;
   pipeline_version: string;
-  status: 'PENDING' | 'RUNNING' | 'WAITING_FOR_USER' | 'COMPLETED' | 'FAILED';
+  status: 'PENDING' | 'RUNNING' | 'WAITING_FOR_USER' | 'COMPLETED' | 'FAILED' | 'NO_ELIGIBLE_EVIDENCE' | 'SUPERSEDED';
+  policy_mode?: 'DEVELOPMENT' | 'STRICT_REVIEW';
   current_stage: string;
   progress_percentage: number;
   completed_stages: string[];
@@ -49,6 +50,8 @@ export interface ApiEvidence {
   notes: string | null;
   authenticity_passed: boolean;
   authenticity_score: number | null;
+  review_status?: string;
+  quarantine_reason?: string | null;
   uploaded_at: string;
 }
 
@@ -277,13 +280,33 @@ export const api = {
   },
 
   // Streamlined Core MVP Case Analysis
-  async analyzeCase(caseId: string): Promise<ApiAnalysisJob> {
+  async analyzeCase(caseId: string, payload?: { policy_mode?: 'DEVELOPMENT' | 'STRICT_REVIEW'; force_reanalysis?: boolean }): Promise<ApiAnalysisJob> {
     const res = await fetch(`${API_BASE}/cases/${caseId}/analyze`, {
-      method: 'POST'
+      method: 'POST',
+      headers: payload ? { 'Content-Type': 'application/json' } : undefined,
+      body: payload ? JSON.stringify(payload) : undefined
     });
     if (!res.ok) {
       const errBody = await res.json().catch(() => ({}));
       throw new Error(errBody.detail || 'Failed to execute case analysis');
+    }
+    return res.json();
+  },
+
+  async updateEvidenceQuarantine(
+    caseId: string,
+    evidenceId: string,
+    reviewStatus: string,
+    reason?: string
+  ): Promise<ApiEvidence> {
+    const res = await fetch(`${API_BASE}/cases/${caseId}/evidence/${evidenceId}/quarantine`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ review_status: reviewStatus, reason })
+    });
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody.detail || 'Failed to update quarantine status');
     }
     return res.json();
   },

@@ -16,6 +16,8 @@ export interface EvidenceFile {
   notes: string | null;
   authenticity_passed: boolean;
   authenticity_score: number | null;
+  review_status?: string;
+  quarantine_reason?: string | null;
   uploaded_at: string;
   extracted_text?: string | null;
   extraction_confidence?: number | null;
@@ -246,18 +248,97 @@ export interface FactClaim {
   category: string;
 }
 
+export interface SemanticVisionObservation {
+  evidence_id: string;
+  filename: string;
+  sha256?: string;
+  model_name: string;
+  status: 'completed' | 'failed' | 'skipped' | string;
+  content_type: 'chat_screenshot' | 'meme' | 'social_post' | 'document_photo' | 'medical_or_official_slip' | 'photo' | 'uncertain' | string;
+  visual_description: string;
+  visual_elements: string[];
+  meme_indicators: string[];
+  social_media_context: string[];
+  text_visual_relationships: string[];
+  context_missed_by_plain_ocr: string[];
+  uncertainties: string[];
+  deduplicated_highlights?: string[];
+  confidence_note?: string;
+  processing_time_ms?: number;
+  error_message?: string | null;
+}
+
 export interface MVPCaseAnalysis {
   id: string;
   case_id: string;
   case_title: string;
   case_domain: string;
+  brief_summary?: string;
+  brief_summary_word_count?: number;
   preliminary_narrative: string;
   narrative_word_count: number;
   evidence_backed_facts: FactClaim[];
   unresolved_questions: ClarificationQuestion[];
+  relevant_participants?: Array<{ name: string; role: string }>;
+  visual_findings?: SemanticVisionObservation[];
+  significant_communications?: Array<Record<string, any>>;
+  attributed_claims?: Array<Record<string, any>>;
+  vision_enabled?: boolean;
+  vision_status_summary?: string;
+  authenticity_assessments?: MediaAuthenticityResult[];
+  authenticity_status_summary?: string;
   timeline_status: 'available' | 'unavailable' | 'partial' | string;
   scheduled_events_count: number;
   unscheduled_events_count: number;
   inference_source: string;
   generated_at: string;
+}
+
+export interface ProvenanceCheckResult {
+  evidence_id: string;
+  filename: string;
+  sha256?: string;
+  file_type: string;
+  classification: 'cryptographically_verified' | 'has_metadata_no_crypto' | 'missing_provenance' | 'corrupted_metadata';
+  has_cryptographic_signature: boolean;
+  has_c2pa_manifest: boolean;
+  signature_issuer?: string | null;
+  claim_generator?: string | null;
+  metadata_fields_found: Record<string, any>;
+  software_agent?: string | null;
+  creation_timestamp?: string | null;
+  provenance_notes: string[];
+  limitations: string[];
+}
+
+export interface MediaAuthenticityResult {
+  evidence_id: string;
+  filename: string;
+  sha256?: string;
+  model_identifier?: string;
+  model_version?: string;
+  raw_score?: number | null;
+  score_interpretation?: string;
+  assessment: 'synthetic_indicators_detected' | 'synthetic_indicators_not_detected' | 'inconclusive';
+  relevant_limitations?: string[];
+  processing_status: 'completed' | 'failed' | 'skipped' | 'inconclusive' | 'unsupported';
+  error_message?: string | null;
+  inference_time_ms?: number;
+  device_used?: string;
+  from_cache?: boolean;
+  provenance?: ProvenanceCheckResult;
+  // Audio specific
+  audio_duration_analyzed_sec?: number;
+  audio_duration_total_sec?: number;
+  coverage_percentage?: number;
+  num_windows_analyzed?: number;
+  window_scores?: Array<{
+    window_index: number;
+    start_sec: number;
+    end_sec: number;
+    synthetic_probability: number;
+    raw_score: number;
+  }>;
+  // Non-media skip reason
+  skip_reason?: string;
 }

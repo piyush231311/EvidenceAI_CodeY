@@ -28,10 +28,13 @@ def process_evidence(
     filename: Optional[str] = None,
     file_category: Optional[str] = None,
     sha256_hash: Optional[str] = None,
+    enable_vision: bool = False,
 ) -> NormalizedExtractionRecord:
     """
     Main entry point for evidence extraction.
     Routes to the appropriate modality parser and returns a normalized record.
+    When enable_vision=True for image files, also runs Qwen3-VL semantic vision
+    and attaches the observation under metadata["semantic_vision"] without overwriting PaddleOCR text.
     """
     path_obj = Path(file_path).resolve()
     if not path_obj.is_file():
@@ -79,6 +82,22 @@ def process_evidence(
                     )
                 )
 
+            meta_dict: Dict[str, Any] = {
+                "engine": "PaddleOCR PP-OCRv6_small",
+                "lines_count": len(segments),
+            }
+            if enable_vision:
+                from src.extraction.semantic_vision import analyze_image_semantics
+                vis_obs = analyze_image_semantics(
+                    image_path=str(path_obj),
+                    evidence_id=evidence_id or sha256[:12],
+                    filename=fname,
+                    sha256=sha256,
+                    ocr_text_hint=ocr_res.get("text", ""),
+                    vision_enabled=True,
+                )
+                meta_dict["semantic_vision"] = json.loads(vis_obs.model_dump_json())
+
             return NormalizedExtractionRecord(
                 evidence_id=evidence_id,
                 filename=fname,
@@ -89,10 +108,7 @@ def process_evidence(
                 full_text=ocr_res.get("text", ""),
                 overall_confidence=ocr_res.get("confidence", 0.0),
                 segments=segments,
-                metadata={
-                    "engine": "PaddleOCR PP-OCRv6_small",
-                    "lines_count": len(segments),
-                },
+                metadata=meta_dict,
                 processing_time_ms=ocr_res.get("processing_time_ms", 0.0),
                 success=True,
             )

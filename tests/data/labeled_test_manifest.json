@@ -1,0 +1,119 @@
+{
+  "version": "1.0.0",
+  "created_at": "2026-11-15T02:00:00Z",
+  "description": "Ground-truth benchmark manifest for Evidence AI media authenticity evaluation",
+  "image_test_cases": [
+    {
+      "id": "img_001",
+      "filename": "real_document_slip.png",
+      "relative_path": "tests/data/real_document_slip.png",
+      "media_type": "image",
+      "subtype": "real_photo_document",
+      "ground_truth": "REAL",
+      "expected_verdict": "synthetic_indicators_not_detected",
+      "description": "Authentic physical document slip scanned via mobile camera"
+    },
+    {
+      "id": "img_002",
+      "filename": "ai_synthetic_portrait.png",
+      "relative_path": "tests/data/ai_synthetic_portrait.png",
+      "media_type": "image",
+      "subtype": "ai_generated_portrait",
+      "ground_truth": "SYNTHETIC",
+      "expected_verdict": "synthetic_indicators_detected",
+      "description": "AI generated portrait photograph"
+    },
+    {
+      "id": "img_003",
+      "filename": "real_chat_screenshot.png",
+      "relative_path": "tests/data/real_chat_screenshot.png",
+      "media_type": "image",
+      "subtype": "genuine_chat_screenshot",
+      "ground_truth": "REAL",
+      "expected_verdict": "synthetic_indicators_not_detected",
+      "description": "Authentic WhatsApp group chat screenshot"
+    },
+    {
+      "id": "img_004",
+      "filename": "ai_chat_meme_overlay.png",
+      "relative_path": "tests/data/ai_chat_meme_overlay.png",
+      "media_type": "image",
+      "subtype": "ai_chat_screenshot",
+      "ground_truth": "SYNTHETIC",
+      "expected_verdict": "synthetic_indicators_detected",
+      "description": "Synthetic portrait frame with meme text banner"
+    },
+    {
+      "id": "img_005",
+      "filename": "meme_screenshot.png",
+      "relative_path": "tests/data/meme_screenshot.png",
+      "media_type": "image",
+      "subtype": "meme_screenshot",
+      "ground_truth": "REAL",
+      "expected_verdict": "synthetic_indicators_not_detected",
+      "description": "Genuine social media app interface screenshot"
+    },
+    {
+      "id": "img_006",
+      "filename": "compressed_synthetic.jpg",
+      "relative_path": "tests/data/compressed_synthetic.jpg",
+      "media_type": "image",
+      "subtype": "compressed_synthetic",
+      "ground_truth": "SYNTHETIC",
+      "expected_verdict": "synthetic_indicators_detected",
+      "description": "AI generated portrait compressed with JPEG Q=65"
+    }
+  ],
+  "audio_test_cases": [
+    {
+      "id": "aud_001",
+      "filename": "tts_speech_confrontation.mp3",
+      "relative_path": "tests/data/tts_speech_confrontation.mp3",
+      "media_type": "audio",
+      "subtype": "tts_speech",
+      "ground_truth": "SYNTHETIC",
+      "expected_verdict": "synthetic_indicators_detected",
+      "description": "Text-to-speech synthetic dialogue recording"
+    },
+    {
+      "id": "aud_002",
+      "filename": "genuine_speech_recording.wav",
+      "relative_path": "tests/data/genuine_speech_recording.wav",
+      "media_type": "audio",
+      "subtype": "genuine_speech",
+      "ground_truth": "REAL",
+      "expected_verdict": "synthetic_indicators_not_detected",
+      "description": "Natural harmonic human speech recording"
+    },
+    {
+      "id": "aud_003",
+      "filename": "compressed_synthetic_audio.mp3",
+      "relative_path": "tests/data/compressed_synthetic_audio.mp3",
+      "media_type": "audio",
+      "subtype": "compressed_synthetic",
+      "ground_truth": "SYNTHETIC",
+      "expected_verdict": "synthetic_indicators_detected",
+      "description": "TTS speech segment after format transcoding"
+    },
+    {
+      "id": "aud_004",
+      "filename": "noisy_speech_recording.wav",
+      "relative_path": "tests/data/noisy_speech_recording.wav",
+      "media_type": "audio",
+      "subtype": "noisy_speech",
+      "ground_truth": "REAL",
+      "expected_verdict": "synthetic_indicators_not_detected",
+      "description": "Natural speech signal with additive ambient acoustic noise"
+    },
+    {
+      "id": "aud_005",
+      "filename": "long_tts_recording.mp3",
+      "relative_path": "tests/data/long_tts_recording.mp3",
+      "media_type": "audio",
+      "subtype": "long_recording",
+      "ground_truth": "SYNTHETIC",
+      "expected_verdict": "synthetic_indicators_detected",
+      "description": "Long multi-window synthetic TTS recording (>8.0s)"
+    }
+  ]
+}

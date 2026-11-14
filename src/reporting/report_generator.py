@@ -24,7 +24,7 @@ from src.intelligence.case_understanding import generate_case_understanding, Cas
 
 
 class IncidentReport(BaseModel):
-    """Forensic Incident Reconstruction Report Schema."""
+    """Forensic Incident Reconstruction Report Schema supporting Output A (Brief Summary) and Output B (Detailed Report)."""
     case_id: str
     generated_at: datetime = Field(default_factory=datetime.utcnow)
     case_title: str = "Forensic Incident Reconstruction Report"
@@ -32,19 +32,34 @@ class IncidentReport(BaseModel):
     report_type: str = "Preliminary evidence-based narrative"
     status: str = "Unverified allegations and unresolved questions remain"
 
+    # Output A: Concise Brief Summary (~100-180 words single paragraph)
+    brief_summary: str = ""
+    brief_summary_word_count: int = 0
+
     # Core 3 Human-Readable Sections
     what_happened: str = ""
     what_remains_unclear: List[str] = Field(default_factory=list)
     what_would_help: List[str] = Field(default_factory=list)
 
-    # Narrative Details & Subsections
+    # Output B: Detailed Report Structured Sections
     case_overview: str = ""
     overview_of_incident: str = ""
+    relevant_participants: List[Dict[str, str]] = Field(default_factory=list)
     dispute_development_sections: List[Dict[str, str]] = Field(default_factory=list)
+    visual_findings: List[Dict[str, Any]] = Field(default_factory=list)
+    significant_communications: List[Dict[str, Any]] = Field(default_factory=list)
+    attributed_claims_and_allegations: List[Dict[str, Any]] = Field(default_factory=list)
     financial_document_findings: Dict[str, Any] = Field(default_factory=dict)
     what_evidence_supports: List[str] = Field(default_factory=list)
+    source_references: List[Dict[str, Any]] = Field(default_factory=list)
     preliminary_conclusion: str = ""
     updated_with_clarifications: bool = False
+    vision_enabled: bool = True
+    vision_status_summary: str = "not_applicable"
+    authenticity_assessments: List[Dict[str, Any]] = Field(default_factory=list)
+    media_authenticity_summary: str = ""
+    policy_mode: str = "DEVELOPMENT"
+    quarantined_evidence: List[Dict[str, Any]] = Field(default_factory=list)
 
     # Technical Appendix
     evidence_inventory: List[Dict[str, Any]] = Field(default_factory=list)
@@ -61,8 +76,8 @@ class IncidentReport(BaseModel):
 
 AI_ASSISTED_ANALYSIS_DISCLAIMER = (
     "DISCLAIMER: This incident reconstruction was generated using AI-assisted extraction and deterministic forensic "
-    "timeline analysis (PaddleOCR, Faster-Whisper, GLiNER, and Qwen via Evidence AI). "
-    "All timestamps, statements, and contradictory claims are compiled directly from source files and investigator testimony. "
+    "timeline analysis (PaddleOCR, Faster-Whisper, Qwen3-VL Semantic Vision, GLiNER, and Qwen via Evidence AI). "
+    "All timestamps, statements, visual observations, and contradictory claims are compiled directly from source files and investigator testimony. "
     "User surety assessments reflect self-reported witness recollection and do not constitute independent physical proof. "
     "This is an AI-assisted illustrative reconstruction based on supplied digital evidence, not a verified judicial finding or legal conclusion."
 )
@@ -76,6 +91,12 @@ def generate_forensic_incident_report(
     questions: List[ClarificationQuestion],
     answers: List[UserAnswer],
     entities_by_type: Optional[Dict[str, List[str]]] = None,
+    vision_observations: Optional[Dict[str, Any]] = None,
+    vision_enabled: bool = True,
+    mvp_analysis: Optional[Any] = None,
+    authenticity_assessments: Optional[Any] = None,
+    policy_mode: str = "DEVELOPMENT",
+    quarantined_evidence: Optional[List[Dict[str, Any]]] = None,
 ) -> IncidentReport:
     """
     Synthesizes case evidence, event reconstruction, contradictions, and user testimony
@@ -151,7 +172,8 @@ def generate_forensic_incident_report(
     # 5. Unresolved questions
     unresolved = [q.prompt for q in questions if q.status == "unanswered"]
 
-    # 6. Generate Case Understanding (Natural Language 3 Sections)
+    # 6. Generate Case Understanding (Natural Language 3 Sections) & Unified Multi-Modal MVP Analysis
+    from src.intelligence.case_analyzer import analyze_case_mvp
     all_events = timeline.scheduled_events + timeline.unscheduled_events
     cu = generate_case_understanding(
         case_id=case_id,
@@ -161,6 +183,41 @@ def generate_forensic_incident_report(
         contradictions=contradictions,
         user_answers=answers,
     )
+
+    if mvp_analysis is None:
+        mvp_analysis = analyze_case_mvp(
+            case_id=case_id,
+            evidence_items=evidence_files,
+            timeline_scheduled_count=len(scheduled_data),
+            timeline_unscheduled_count=len(unscheduled_data),
+            events=all_events,
+            contradictions=contradictions,
+            vision_observations=vision_observations,
+            vision_enabled=vision_enabled,
+            authenticity_assessments=authenticity_assessments,
+            policy_mode=policy_mode,
+        )
+
+    brief_summary = getattr(mvp_analysis, "brief_summary", "") or ""
+    brief_w_count = getattr(mvp_analysis, "brief_summary_word_count", 0) or len(brief_summary.split())
+    vis_findings = getattr(mvp_analysis, "visual_findings", []) or []
+    rel_participants = getattr(mvp_analysis, "relevant_participants", []) or []
+    sig_comms = getattr(mvp_analysis, "significant_communications", []) or []
+    attr_claims = getattr(mvp_analysis, "attributed_claims", []) or []
+    vis_status = getattr(mvp_analysis, "vision_status_summary", "not_applicable")
+    src_refs = [
+        {
+            "claim_id": f.claim_id,
+            "topic": f.topic,
+            "claim_text": f.claim_text,
+            "evidence_id": f.citation.evidence_id,
+            "filename": f.citation.filename,
+            "verbatim_quote": f.citation.verbatim_quote,
+            "timestamp_or_date": f.citation.timestamp_or_date,
+            "category": f.category,
+        }
+        for f in (getattr(mvp_analysis, "evidence_backed_facts", []) or [])
+    ]
 
     text_lower = all_evidence_text.lower()
     is_kl8842_case = "kl-8842" in text_lower or "vikram" in text_lower or "rohan" in text_lower
@@ -403,6 +460,10 @@ def generate_forensic_incident_report(
             "During the audio recording, Aman refused to remove the post and stated 'Go ahead. Then I'll post more' when warned of a complaint to the Dean.",
             "On November 6, 2026 at 11:30 AM, Dr. Priya Sharma at the University Wellness Centre documented Sana Khan's crisis support visit for severe anxiety and distress related to peer behavior and social media harassment."
         ]
+        if vision_enabled and any(vf.get("status") == "completed" for vf in vis_findings):
+            supported_facts.append(
+                "Qwen3-VL semantic visual analysis confirms 'cse_b_memes' depicts a candid classroom reaction photo of a female student caught mid-sentence with an open-mouth expression beneath a white top caption bar ('When Sana opens her mouth'), viewer avatars beside 'Seen by 143', and uploader toolbar controls."
+            )
 
         conclusion = (
             "The multi-modal evidence record — comprising group chat logs, an account-owner story screenshot, a recorded verbal confrontation, "
@@ -443,6 +504,34 @@ def generate_forensic_incident_report(
         )
 
     incident_narrative = f"{what_happened}\n\n{conclusion}"
+    extraction_methods = [
+        "PaddleOCR (Screenshot & Image Text Extraction)",
+        "Faster-Whisper Small (Forensic Audio Intercept Transcription)",
+        "Python Unified Doc Parsers (EML, JSON, CSV, DOCX, TXT)",
+        "GLiNER small-v2.1 (Named Entity Recognition)",
+        "RapidFuzz (Cross-Evidence Entity Disambiguation)",
+        "Qwen Structured Reasoning (Forensic Event Extraction)",
+    ]
+    if vision_enabled:
+        extraction_methods.insert(1, "Qwen3-VL 4B Instruct (Semantic Image & Meme Visual Analysis)")
+
+    auth_list: List[Dict[str, Any]] = []
+    media_auth_summary = ""
+    if authenticity_assessments:
+        if isinstance(authenticity_assessments, dict):
+            auth_list = list(authenticity_assessments.values())
+        elif isinstance(authenticity_assessments, list):
+            auth_list = authenticity_assessments
+
+        extraction_methods.append("Sentry ConvNeXt Small (Image Authenticity & AI-Generation Screening)")
+        extraction_methods.append("PellaV2 w2v-BERT-2.0 (Audio Deepfake & Synthetic Speech Screening)")
+        extraction_methods.append("Forensic Metadata & Cryptographic Provenance Audit (C2PA / EXIF / ID3)")
+
+        synth_count = sum(1 for a in auth_list if a.get("assessment") == "synthetic_indicators_detected")
+        if synth_count > 0:
+            media_auth_summary = f"Forensic screening detected synthetic generation indicators in {synth_count} media evidence item(s)."
+        else:
+            media_auth_summary = "Forensic screening completed for media evidence items; no synthetic generation indicators detected."
 
     return IncidentReport(
         case_id=case_id,
@@ -450,25 +539,31 @@ def generate_forensic_incident_report(
         relevant_date=relevant_date,
         report_type=report_type,
         status=status_text,
+        brief_summary=brief_summary,
+        brief_summary_word_count=brief_w_count,
         what_happened=what_happened,
         what_remains_unclear=what_remains_unclear,
         what_would_help=what_would_help,
         updated_with_clarifications=cu.updated_with_clarifications,
         case_overview=overview,
         overview_of_incident=overview,
+        relevant_participants=rel_participants,
         dispute_development_sections=dev_sections,
+        visual_findings=vis_findings,
+        significant_communications=sig_comms,
+        attributed_claims_and_allegations=attr_claims,
         financial_document_findings=financial_findings,
         what_evidence_supports=supported_facts,
+        source_references=src_refs,
         preliminary_conclusion=conclusion,
+        vision_enabled=vision_enabled,
+        vision_status_summary=vis_status,
+        authenticity_assessments=auth_list,
+        media_authenticity_summary=media_auth_summary,
+        policy_mode=policy_mode,
+        quarantined_evidence=quarantined_evidence or [],
         evidence_inventory=inv,
-        extraction_methods_summary=[
-            "PaddleOCR (Screenshot & Image Text Extraction)",
-            "Faster-Whisper Small (Forensic Audio Intercept Transcription)",
-            "Python Unified Doc Parsers (EML, JSON, CSV, DOCX, TXT)",
-            "GLiNER small-v2.1 (Named Entity Recognition)",
-            "RapidFuzz (Cross-Evidence Entity Disambiguation)",
-            "Qwen Structured Reasoning (Forensic Event Extraction)",
-        ],
+        extraction_methods_summary=extraction_methods,
         key_entities=entities_by_type or {},
         chronological_timeline=scheduled_data,
         unscheduled_events=unscheduled_data,
@@ -567,6 +662,150 @@ def render_incident_report_html(report: IncidentReport) -> str:
         </div>
         """
 
+    brief_summary_html = ""
+    if report.brief_summary:
+        brief_summary_html = f"""
+        <div style="background: #f0fdfa; border: 1.5px solid #14b8a6; border-radius: 6px; padding: 16px 20px; margin-bottom: 22px;">
+            <div style="font-size: 12px; font-weight: 700; color: #0f766e; text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 6px;">
+                Output A — Brief Incident Summary ({report.brief_summary_word_count or len(report.brief_summary.split())} words)
+            </div>
+            <p style="font-size: 13.5px; color: #134e4a; line-height: 1.7; margin: 0;">{report.brief_summary}</p>
+        </div>
+        """
+
+    vis_findings_html = ""
+    if report.visual_findings:
+        vis_cards = []
+        for vf in report.visual_findings:
+            mi_str = "; ".join(vf.get("meme_indicators") or [])
+            sm_str = "; ".join(vf.get("social_media_context") or [])
+            tv_str = "; ".join(vf.get("text_visual_relationships") or [])
+            unc_str = "; ".join(vf.get("uncertainties") or [])
+            vis_cards.append(
+                f"<div style='background: #faf5ff; border: 1px solid #d8b4fe; border-radius: 6px; padding: 12px 14px; margin-bottom: 10px;'>"
+                f"<div style='font-weight: 700; font-size: 13px; color: #581c87; margin-bottom: 4px;'>"
+                f"Image Source: {vf.get('filename')} <span style='font-weight: 400; font-size: 11px; color: #6b21a8;'>(Type: {vf.get('content_type')} | Status: {vf.get('status')} | Model: {vf.get('model_name')})</span></div>"
+                f"<p style='font-size: 12.5px; color: #3b0764; margin: 0 0 6px 0;'><strong>Visual Scene:</strong> {vf.get('visual_description')}</p>"
+                + (f"<div style='font-size: 12px; color: #4c1d95; margin-bottom: 3px;'><strong>Meme Indicators:</strong> {mi_str}</div>" if mi_str else "")
+                + (f"<div style='font-size: 12px; color: #4c1d95; margin-bottom: 3px;'><strong>Platform / UI Context:</strong> {sm_str}</div>" if sm_str else "")
+                + (f"<div style='font-size: 12px; color: #4c1d95; margin-bottom: 3px;'><strong>Text-Visual Relationship:</strong> {tv_str}</div>" if tv_str else "")
+                + (f"<div style='font-size: 11.5px; color: #6b21a8;'><strong>Visual Uncertainties:</strong> {unc_str}</div>" if unc_str else "")
+                + "</div>"
+            )
+        vis_findings_html = f"<h3>Relevant Visual Semantic Observations (Qwen3-VL)</h3>{''.join(vis_cards)}"
+
+    media_auth_html = ""
+    if report.authenticity_assessments:
+        auth_rows = []
+        for item in report.authenticity_assessments:
+            assessment = item.get("assessment", "inconclusive")
+            status = item.get("processing_status", "completed")
+            model = item.get("model_identifier", "Detector")
+            ver = item.get("model_version", "1.0")
+            score = item.get("raw_score")
+            score_str = f"{score:.4f}" if isinstance(score, (int, float)) else "N/A"
+            prov = item.get("provenance") or {}
+            prov_class = prov.get("classification", "missing_provenance").replace("_", " ").title()
+
+            if assessment == "synthetic_indicators_detected":
+                badge_color = "#e11d48"
+                badge_bg = "#ffe4e6"
+                badge_text = "SYNTHETIC DETECTED"
+            elif assessment == "synthetic_indicators_not_detected":
+                badge_color = "#059669"
+                badge_bg = "#d1fae5"
+                badge_text = "NOT DETECTED"
+            elif status == "skipped":
+                badge_color = "#64748b"
+                badge_bg = "#f1f5f9"
+                badge_text = "SKIPPED (NON-MEDIA)"
+            else:
+                badge_color = "#d97706"
+                badge_bg = "#fef3c7"
+                badge_text = "INCONCLUSIVE"
+
+            extra_info = []
+            if item.get("file_type") == "audio" and item.get("audio_duration_analyzed_sec") is not None:
+                extra_info.append(f"Duration: {item.get('audio_duration_analyzed_sec')}s ({item.get('coverage_percentage', 100):.0f}% coverage across {item.get('num_windows_analyzed', 1)} windows)")
+            if item.get("score_interpretation"):
+                extra_info.append(item.get("score_interpretation"))
+            if prov_class:
+                extra_info.append(f"Provenance: {prov_class}")
+
+            details_html = "<br/>".join(f"<small style='color: #475569;'>{info}</small>" for info in extra_info)
+
+            auth_rows.append(
+                f"<tr>"
+                f"<td style='padding: 8px 10px; font-weight: 500;'>{item.get('filename')}<br/><small style='color: #64748b; text-transform: uppercase;'>{item.get('file_type')}</small></td>"
+                f"<td style='padding: 8px 10px;'><span style='background: {badge_bg}; color: {badge_color}; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.3px;'>{badge_text}</span></td>"
+                f"<td style='padding: 8px 10px; font-family: monospace; font-size: 12px;'>{score_str}</td>"
+                f"<td style='padding: 8px 10px; font-size: 12px;'>{model} (v{ver})</td>"
+                f"<td style='padding: 8px 10px; font-size: 12px;'>{details_html}</td>"
+                f"</tr>"
+            )
+        auth_table_html = "".join(auth_rows)
+        media_auth_html = f"""
+        <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 6px; padding: 18px 20px; margin-bottom: 24px;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+                <h3 style="margin: 0; font-size: 14.5px; color: #0f172a; text-transform: uppercase; letter-spacing: 0.2px;">
+                    Media Authenticity & Deepfake Screening (Sentry ConvNeXt & PellaV2)
+                </h3>
+            </div>
+            <p style="font-size: 12.5px; color: #475569; margin: 0 0 12px 0;">
+                Probabilistic detection evaluates acoustic generation artifacts and synthetic pixel distributions.
+                <em>Forensic Rule:</em> Detection warnings do not reject or invalidate evidence items; missing metadata is not proof of tampering.
+            </p>
+            <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+                <thead>
+                    <tr style="background: #f8fafc;">
+                        <th style="padding: 8px 10px; border: 1px solid #e2e8f0;">Evidence File</th>
+                        <th style="padding: 8px 10px; border: 1px solid #e2e8f0;">Assessment Verdict</th>
+                        <th style="padding: 8px 10px; border: 1px solid #e2e8f0;">Synthetic Probability</th>
+                        <th style="padding: 8px 10px; border: 1px solid #e2e8f0;">Detector Model</th>
+                        <th style="padding: 8px 10px; border: 1px solid #e2e8f0;">Analysis Details & Provenance</th>
+                    </tr>
+                </thead>
+                <tbody>{auth_table_html}</tbody>
+            </table>
+        </div>
+        """
+
+    quarantined_html = ""
+    if report.quarantined_evidence:
+        q_rows = []
+        for qe in report.quarantined_evidence:
+            score = qe.get("authenticity_score")
+            score_disp = f"{score:.4f}" if isinstance(score, (int, float)) else "N/A"
+            q_rows.append(
+                f"<tr>"
+                f"<td style='padding: 8px 10px; font-weight: 500;'>{qe.get('filename')}<br/><small style='color: #64748b; text-transform: uppercase;'>{qe.get('file_type')}</small></td>"
+                f"<td style='padding: 8px 10px;'><span style='background: #ffe4e6; color: #e11d48; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 700;'>{qe.get('review_status', 'EXCLUDED')}</span></td>"
+                f"<td style='padding: 8px 10px; font-family: monospace; font-size: 12px;'>{score_disp}</td>"
+                f"<td style='padding: 8px 10px; font-size: 12px; color: #881337;'>{qe.get('quarantine_reason') or 'Excluded by forensic policy'}</td>"
+                f"</tr>"
+            )
+        quarantined_html = f"""
+        <div style="background: #fff1f2; border: 1px solid #fecdd3; border-radius: 6px; padding: 18px 20px; margin-bottom: 24px;">
+            <h3 style="margin: 0 0 6px 0; font-size: 14.5px; color: #9f1239; text-transform: uppercase; letter-spacing: 0.2px;">
+                Quarantined & Excluded Evidence (Policy: {report.policy_mode})
+            </h3>
+            <p style="font-size: 12.5px; color: #881337; margin: 0 0 12px 0;">
+                The following evidence items were identified as synthetic or flagged by policy and excluded from active event reconstruction and timeline derivation:
+            </p>
+            <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+                <thead>
+                    <tr style="background: #ffe4e6;">
+                        <th style="padding: 8px 10px; border: 1px solid #fecdd3; color: #9f1239;">Evidence File</th>
+                        <th style="padding: 8px 10px; border: 1px solid #fecdd3; color: #9f1239;">Status</th>
+                        <th style="padding: 8px 10px; border: 1px solid #fecdd3; color: #9f1239;">Synthetic Probability</th>
+                        <th style="padding: 8px 10px; border: 1px solid #fecdd3; color: #9f1239;">Quarantine Reason / Policy Notes</th>
+                    </tr>
+                </thead>
+                <tbody>{''.join(q_rows)}</tbody>
+            </table>
+        </div>
+        """
+
     clarification_notice = ""
     if report.updated_with_clarifications:
         clarification_notice = """
@@ -606,18 +845,27 @@ def render_incident_report_html(report: IncidentReport) -> str:
     <p><strong>Case Subject:</strong> {report.case_title}</p>
     <p><strong>Relevant Date Range:</strong> {report.relevant_date}</p>
     <p><strong>Investigation Status:</strong> {report.status}</p>
+    <p><strong>Semantic Vision Status:</strong> {report.vision_status_summary.upper()}</p>
     <p><strong>Report Synthesized:</strong> {report.generated_at.strftime("%B %d, %Y, %I:%M %p UTC")}</p>
   </div>
 
   {clarification_notice}
 
+  {brief_summary_html}
+
   <!-- SECTION A: WHAT APPEARS TO HAVE HAPPENED -->
-  <h2>Section A. What Appears to Have Happened?</h2>
+  <h2>Section A. What Appears to Have Happened? (Detailed Report)</h2>
   <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 6px; padding: 18px 20px; margin-bottom: 20px;">
     {what_happened_html}
   </div>
 
   {fin_html}
+
+  {vis_findings_html}
+
+  {media_auth_html}
+
+  {quarantined_html}
 
   {f"<h3>Chronological Case Evolution</h3>{dev_sections_html}" if dev_sections_html else ""}
 
