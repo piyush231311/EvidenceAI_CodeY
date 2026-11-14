@@ -45,6 +45,7 @@ AUDIO_AUTH_CACHE_FILE = PROJECT_ROOT / "models_cache" / "audio_authenticity_cach
 
 MODEL_IDENTIFIER = "pellav2-audio-deepfake-detector"
 MODEL_VERSION = "2.0.0"
+POLICY_VERSION = "2.0.0"
 SR = 16000
 WINDOW_DURATION_SEC = 4.0
 WINDOW_SAMPLES = int(WINDOW_DURATION_SEC * SR)  # 64,000 samples
@@ -96,12 +97,20 @@ class AudioAuthenticityResult(BaseModel):
     filename: str
     modality: str = "audio"
     detector_name: str = MODEL_IDENTIFIER
+    detector_model: str = MODEL_IDENTIFIER
     model_version: str = MODEL_VERSION
+    policy_version: str = POLICY_VERSION
     inference_executed: bool = False
     raw_score: Optional[float] = None  # Aggregate synthetic speech score [0.0 - 1.0]
+    synthetic_score: Optional[float] = None  # Explicit contract field for synthetic score
+    raw_model_output: Optional[Dict[str, Any]] = None  # Window count, mean, peak scores
+    score_type: str = "w2v_bert_window_aggregate"  # Score interpretation type
+    calibrated_probability: Optional[float] = None  # None unless Platt/isotonic calibrated
     score_interpretation: str = ""
+    assessment_reason: str = ""
     decision_threshold: float = 0.50
     assessment: CanonicalAssessment = "INCONCLUSIVE"
+    assessment_status: CanonicalAssessment = "INCONCLUSIVE"
     audio_duration_total_sec: float = 0.0
     audio_duration_analyzed_sec: float = 0.0
     coverage_percentage: float = 0.0
@@ -116,6 +125,21 @@ class AudioAuthenticityResult(BaseModel):
     device_used: str = "cpu"
     from_cache: bool = False
     analyzed_at: datetime = Field(default_factory=datetime.utcnow)
+
+    def model_post_init(self, __context: Any) -> None:
+        if self.synthetic_score is None and self.raw_score is not None:
+            self.synthetic_score = self.raw_score
+        elif self.raw_score is None and self.synthetic_score is not None:
+            self.raw_score = self.synthetic_score
+        if not self.assessment_status or self.assessment_status == "INCONCLUSIVE":
+            if self.assessment != "INCONCLUSIVE":
+                self.assessment_status = self.assessment
+        if not self.assessment_reason and self.score_interpretation:
+            self.assessment_reason = self.score_interpretation
+        elif not self.score_interpretation and self.assessment_reason:
+            self.score_interpretation = self.assessment_reason
+        if not self.detector_model and self.detector_name:
+            self.detector_model = self.detector_name
 
     # Backward compatibility properties
     @property
@@ -338,7 +362,7 @@ def assess_audio_authenticity(
     """
     path_obj = Path(audio_path)
     fname = filename or path_obj.name
-    cache_key = f"{sha256}::{MODEL_IDENTIFIER}::{MODEL_VERSION}"
+    cache_key = f"{sha256}::{MODEL_IDENTIFIER}::{MODEL_VERSION}::p{POLICY_VERSION}"
 
     # 1. Check disk cache first unless force_refresh is requested
     if not force_refresh and sha256 and AUDIO_AUTH_CACHE_FILE.exists():
@@ -487,17 +511,31 @@ def assess_audio_authenticity(
                 "features": "fbank 80-mel filterbanks",
             }
 
+            raw_output = {
+                "num_windows": len(window_tuples),
+                "mean_synthetic_score": round(agg_score, 4),
+                "peak_synthetic_score": round(max_score, 4),
+            }
+
             res = AudioAuthenticityResult(
                 evidence_id=evidence_id,
                 filename=fname,
                 file_hash=sha256,
                 detector_name=MODEL_IDENTIFIER,
+                detector_model=MODEL_IDENTIFIER,
                 model_version=MODEL_VERSION,
+                policy_version=POLICY_VERSION,
                 inference_executed=True,
                 raw_score=agg_score,
+                synthetic_score=agg_score,
+                raw_model_output=raw_output,
+                score_type="w2v_bert_window_aggregate",
+                calibrated_probability=None,
                 score_interpretation=interp,
+                assessment_reason=interp,
                 decision_threshold=0.50,
                 assessment=assessment,
+                assessment_status=assessment,
                 audio_duration_total_sec=total_duration,
                 audio_duration_analyzed_sec=round(analyzed_duration, 2),
                 coverage_percentage=coverage_pct,

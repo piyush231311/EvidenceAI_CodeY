@@ -1,6 +1,20 @@
+export interface User {
+  id: string;
+  email: string;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface DemoCredentials {
+  enabled: boolean;
+  email: string;
+  password: string;
+}
+
 export interface Case {
   id: string;
   created_at: string;
+  owner_id?: string | null;
   evidence_count?: number;
 }
 
@@ -315,13 +329,23 @@ export interface MediaAuthenticityResult {
   evidence_id: string;
   filename: string;
   sha256?: string;
+  detector_name?: string;
+  detector_model?: string;
   model_identifier?: string;
   model_version?: string;
+  inference_executed?: boolean;
   raw_score?: number | null;
+  synthetic_score?: number | null;
+  raw_model_output?: Record<string, any> | null;
+  score_type?: string;
+  calibrated_probability?: number | null;
   score_interpretation?: string;
-  assessment: 'synthetic_indicators_detected' | 'synthetic_indicators_not_detected' | 'inconclusive';
+  assessment_reason?: string;
+  decision_threshold?: number | null;
+  assessment: 'SYNTHETIC_INDICATORS_DETECTED' | 'NO_STRONG_SYNTHETIC_INDICATORS' | 'INCONCLUSIVE' | 'UNSUPPORTED' | 'FAILED' | string;
+  assessment_status?: string;
   relevant_limitations?: string[];
-  processing_status: 'completed' | 'failed' | 'skipped' | 'inconclusive' | 'unsupported';
+  processing_status: 'COMPLETED' | 'FAILED' | 'SKIPPED' | 'INCONCLUSIVE' | 'UNSUPPORTED' | string;
   error_message?: string | null;
   inference_time_ms?: number;
   device_used?: string;

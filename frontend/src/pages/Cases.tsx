@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Trash2, ArrowRight, Folder } from 'lucide-react';
+import { Plus, Trash2, ArrowRight, Folder, AlertCircle } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { Button } from '../components/common/Button';
 import { Modal } from '../components/common/Modal';
@@ -8,7 +8,7 @@ import { ConfirmDialog } from '../components/common/ConfirmDialog';
 
 export const Cases: React.FC = () => {
   const navigate = useNavigate();
-  const { cases, createCase, deleteCase, isLoading } = useApp();
+  const { cases, createCase, deleteCase, isLoading, error, refreshData } = useApp();
 
   const [isCreateOpen, setIsCreateOpen] = useState<boolean>(false);
   const [caseIdInput, setCaseIdInput] = useState<string>('');
@@ -53,7 +53,16 @@ export const Cases: React.FC = () => {
       </div>
 
       {/* Cases Content */}
-      {isLoading ? (
+      {error ? (
+        <div className="bg-rose-50 border border-rose-200 text-rose-800 rounded-md p-8 text-center max-w-md mx-auto my-8">
+          <AlertCircle className="w-8 h-8 text-rose-600 mx-auto mb-2" />
+          <h3 className="text-sm font-semibold mb-1">Failed to load cases</h3>
+          <p className="text-xs text-rose-700 mb-4">{error}</p>
+          <Button variant="secondary" size="sm" onClick={() => refreshData()}>
+            Retry connection
+          </Button>
+        </div>
+      ) : isLoading ? (
         <div className="py-12 text-center text-xs text-[#6B6862]">Loading cases...</div>
       ) : cases.length === 0 ? (
         /* Empty State */

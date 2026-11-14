@@ -485,7 +485,7 @@ def test_scenario_b_strict_review_mode_all_synthetic_zero_eligible():
         for rev in reloaded_evs:
             assert rev.review_status == "EXCLUDED_PENDING_REVIEW"
             assert "Strict Review" in rev.quarantine_reason
-            assert "synthetic_indicators_detected" in rev.quarantine_reason
+            assert "synthetic_indicators_detected" in rev.quarantine_reason.lower()
 
         # Verify no reports or MVP records exist
         rep = db.query(ReconstructedReportRecord).filter(ReconstructedReportRecord.case_id == case_id).first()

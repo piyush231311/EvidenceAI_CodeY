@@ -1,13 +1,24 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Upload, LogOut } from 'lucide-react';
+import { Upload, LogOut, User as UserIcon, Power } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { useAuth } from '../../context/AuthContext';
 import { Button } from '../common/Button';
 import { triggerQuickExit } from '../../hooks/useQuickExit';
 
 export const TopNavbar: React.FC = () => {
   const navigate = useNavigate();
   const { cases, activeCaseId, setActiveCaseId } = useApp();
+  const { user, logout } = useAuth();
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+      navigate('/');
+    } catch (err) {
+      console.error('Logout failed:', err);
+    }
+  };
 
   return (
     <header className="h-14 bg-white border-b border-[#E6E4DF] px-6 flex items-center justify-between gap-4 sticky top-0 z-20 print:hidden">
@@ -41,6 +52,29 @@ export const TopNavbar: React.FC = () => {
           <span>Add evidence</span>
         </Button>
 
+        {/* Authenticated User Badge */}
+        {user && (
+          <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-[#FBFBF9] border border-[#E6E4DF] rounded-md text-xs text-[#1C1917] font-medium">
+            <UserIcon className="w-3.5 h-3.5 text-[#0F766E]" />
+            <span className="max-w-[150px] truncate" title={user.email}>
+              {user.email}
+            </span>
+          </div>
+        )}
+
+        {/* Sign Out Button */}
+        <button
+          onClick={handleLogout}
+          type="button"
+          aria-label="Sign out of Evidence AI"
+          title="Sign out of your session"
+          className="h-8 px-2.5 rounded text-xs font-medium bg-white hover:bg-[#F9F9F8] text-[#57534E] hover:text-[#1C1917] border border-[#E6E4DF] transition-colors flex items-center gap-1.5 focus:outline-none focus:ring-2 focus:ring-[#0F766E]"
+        >
+          <Power className="w-3.5 h-3.5 text-[#78716C]" />
+          <span className="hidden md:inline">Sign out</span>
+        </button>
+
+        {/* Quick Exit Button */}
         <button
           onClick={triggerQuickExit}
           type="button"

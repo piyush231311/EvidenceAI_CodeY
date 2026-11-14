@@ -88,6 +88,12 @@ def init_db():
                     if col_name not in cols_j:
                         conn.execute(text(f"ALTER TABLE analysis_jobs ADD COLUMN {col_name} {col_type}"))
 
+                # Auto-migrate cases table for owner_id
+                res_c = conn.execute(text("PRAGMA table_info(cases)"))
+                cols_c = [row[1] for row in res_c.fetchall()]
+                if "owner_id" not in cols_c:
+                    conn.execute(text("ALTER TABLE cases ADD COLUMN owner_id VARCHAR(36)"))
+
                 conn.commit()
         except Exception:
             pass

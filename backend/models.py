@@ -7,12 +7,39 @@ from pydantic import BaseModel, ConfigDict, Field
 from .db import Base
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    hashed_password = Column(String(255), nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    cases = relationship("Case", back_populates="owner")
+    sessions = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
+
+
+class UserSession(Base):
+    __tablename__ = "user_sessions"
+
+    id = Column(String(64), primary_key=True)  # session token
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    expires_at = Column(DateTime, nullable=False, index=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+
+    user = relationship("User", back_populates="sessions")
+
+
 class Case(Base):
     __tablename__ = "cases"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    owner_id = Column(String(36), ForeignKey("users.id"), nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
+    owner = relationship("User", back_populates="cases")
     evidence_items = relationship("Evidence", back_populates="case", cascade="all, delete-orphan")
 
 
@@ -247,11 +274,37 @@ class EvidenceResponse(BaseModel):
     processing_time_ms: Optional[float] = None
 
 
+class UserResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    email: str
+    is_active: bool
+    created_at: datetime
+
+
+class LoginPayload(BaseModel):
+    email: str
+    password: str
+
+
+class AuthStatusResponse(BaseModel):
+    authenticated: bool
+    user: Optional[UserResponse] = None
+
+
+class DemoCredentialsResponse(BaseModel):
+    enabled: bool
+    email: str
+    password: str
+
+
 class CaseResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
     created_at: datetime
+    owner_id: Optional[str] = None
 
 
 class AuditLogResponse(BaseModel):

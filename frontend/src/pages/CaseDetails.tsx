@@ -1665,53 +1665,101 @@ export const CaseDetails: React.FC = () => {
               {(() => {
                 const total = caseEvidence.length;
                 let assessed = 0;
+                let cachedCount = 0;
                 let syntheticCount = 0;
                 let notDetectedCount = 0;
+                let inconclusiveCount = 0;
+                let failedCount = 0;
+                let unsupportedCount = 0;
+
                 let quarantinedCount = 0;
+                let includedCount = 0;
                 let flaggedCount = 0;
 
                 caseEvidence.forEach(ev => {
-                  if (['EXCLUDED_BY_POLICY', 'EXCLUDED_PENDING_REVIEW', 'EXCLUDED_BY_INVESTIGATOR'].includes(ev.review_status || '')) quarantinedCount++;
-                  if (ev.review_status === 'FLAGGED_FOR_REVIEW') flaggedCount++;
+                  // 1. Evidence inclusion decision
+                  const isExcluded = ['EXCLUDED_BY_POLICY', 'EXCLUDED_PENDING_REVIEW', 'EXCLUDED_BY_INVESTIGATOR'].includes(ev.review_status || '');
+                  if (isExcluded) {
+                    quarantinedCount++;
+                  } else {
+                    includedCount++;
+                    if (ev.review_status === 'FLAGGED_FOR_REVIEW') flaggedCount++;
+                  }
 
+                  // 2. Automated detector assessment outcome
                   const rawMeta = ev.extraction_metadata;
                   const parsed = typeof rawMeta === 'string' ? (() => { try { return JSON.parse(rawMeta); } catch { return null; } })() : rawMeta;
                   const auth = parsed?.media_authenticity;
-                  if (auth && auth.processing_status === 'completed') {
-                    assessed++;
-                    if (auth.assessment === 'synthetic_indicators_detected') syntheticCount++;
-                    else if (auth.assessment === 'synthetic_indicators_not_detected') notDetectedCount++;
+                  if (auth) {
+                    const procStatus = String(auth.processing_status || '').toUpperCase();
+                    const assStatus = String(auth.assessment_status || auth.assessment || '').toUpperCase();
+                    if (auth.from_cache) cachedCount++;
+
+                    if (procStatus === 'COMPLETED') {
+                      assessed++;
+                      if (assStatus === 'SYNTHETIC_INDICATORS_DETECTED' || assStatus === 'SYNTHETIC') {
+                        syntheticCount++;
+                      } else if (assStatus === 'NO_STRONG_SYNTHETIC_INDICATORS' || assStatus === 'NOT_DETECTED') {
+                        notDetectedCount++;
+                      } else {
+                        inconclusiveCount++;
+                      }
+                    } else if (procStatus === 'FAILED' || assStatus === 'FAILED') {
+                      failedCount++;
+                    } else if (procStatus === 'SKIPPED' || procStatus === 'UNSUPPORTED' || assStatus === 'UNSUPPORTED') {
+                      unsupportedCount++;
+                    }
                   }
                 });
 
                 return (
                   <div className="bg-[#F9F9F7] border border-[#E6E4DF] rounded-md p-3 flex flex-wrap items-center justify-between gap-3 text-xs">
-                    <div className="flex items-center gap-3">
+                    <div className="flex flex-wrap items-center gap-2.5">
                       <div className="flex items-center gap-1.5 font-semibold text-[#1C1917]">
                         <ShieldCheck className="w-4 h-4 text-[#0F766E]" />
                         <span>Media Authenticity & Policy Inventory:</span>
                       </div>
-                      <span className="text-[#6B6862]">
+                      <span className="text-[#6B6862] text-[11px]">
                         Total Files: <strong>{total}</strong> | Assessed: <strong>{assessed}</strong>
+                        {cachedCount > 0 && <span className="opacity-75"> ({cachedCount} cached)</span>}
                       </span>
                       {syntheticCount > 0 && (
                         <span className="px-2 py-0.5 rounded bg-rose-100 text-rose-800 font-semibold text-[11px]">
-                          Synthetic: {syntheticCount}
+                          Synthetic Indicators: {syntheticCount}
                         </span>
                       )}
-                      {quarantinedCount > 0 && (
+                      {notDetectedCount > 0 && (
+                        <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-medium text-[11px]">
+                          Authentic / Not Detected: {notDetectedCount}
+                        </span>
+                      )}
+                      {inconclusiveCount > 0 && (
+                        <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-800 font-medium text-[11px]">
+                          Inconclusive: {inconclusiveCount}
+                        </span>
+                      )}
+                      {failedCount > 0 && (
+                        <span className="px-2 py-0.5 rounded bg-red-100 text-red-800 font-medium text-[11px]">
+                          Failed: {failedCount}
+                        </span>
+                      )}
+                      {quarantinedCount > 0 ? (
                         <span className="px-2 py-0.5 rounded bg-rose-50 border border-rose-200 text-rose-700 font-medium text-[11px]">
                           Quarantined: {quarantinedCount}
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-emerald-800 font-medium text-[11px]">
+                          Included: {includedCount}
                         </span>
                       )}
                       {flaggedCount > 0 && (
                         <span className="px-2 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-800 font-medium text-[11px]">
-                          Flagged (Dev): {flaggedCount}
+                          Flagged for Review: {flaggedCount}
                         </span>
                       )}
                     </div>
                     <div className="text-[11px] text-[#6B6862] font-mono">
-                      Models: Sentry ConvNeXt (Image) &bull; PellaV2 w2v-BERT-2.0 (Audio)
+                      Models: Sentry ConvNeXt (Image) &bull; PellaV2 w2v-BERT (Audio)
                     </div>
                   </div>
                 );
@@ -1806,15 +1854,36 @@ export const CaseDetails: React.FC = () => {
 
                             if (!auth) {
                               if (['image', 'audio'].includes(file.file_type?.toLowerCase() || '')) {
-                                return <span className="text-[11px] text-stone-400">Pending</span>;
+                                return <span className="text-[11px] text-stone-400">Unassessed</span>;
                               }
-                              return <span className="text-[11px] text-stone-400">N/A (doc)</span>;
+                              return <span className="text-[11px] text-stone-400">Unsupported</span>;
                             }
 
-                            const isSynthetic = auth.assessment === 'synthetic_indicators_detected';
-                            const isNotDetected = auth.assessment === 'synthetic_indicators_not_detected';
-                            const isSkipped = auth.processing_status === 'skipped';
-                            const score = auth.raw_score !== null && auth.raw_score !== undefined ? `${(auth.raw_score * 100).toFixed(1)}%` : null;
+                            const procStatus = String(auth.processing_status || '').toUpperCase();
+                            const assStatus = String(auth.assessment_status || auth.assessment || '').toUpperCase();
+                            const isSynthetic = assStatus === 'SYNTHETIC_INDICATORS_DETECTED' || assStatus === 'SYNTHETIC';
+                            const isNotDetected = assStatus === 'NO_STRONG_SYNTHETIC_INDICATORS' || assStatus === 'NOT_DETECTED';
+                            const isSkipped = procStatus === 'SKIPPED' || procStatus === 'UNSUPPORTED' || assStatus === 'UNSUPPORTED';
+                            const isFailed = procStatus === 'FAILED' || assStatus === 'FAILED' || assStatus === 'DETECTION_FAILED';
+
+                            const rawScore = auth.synthetic_score !== undefined && auth.synthetic_score !== null
+                              ? auth.synthetic_score
+                              : auth.raw_score !== undefined && auth.raw_score !== null
+                              ? auth.raw_score
+                              : null;
+
+                            const hasValidScore = auth.inference_executed !== false && rawScore !== null && !isSkipped && !isFailed;
+                            const scoreText = hasValidScore ? `${(rawScore * 100).toFixed(1)}%` : null;
+
+                            const label = isSynthetic
+                              ? 'Synthetic'
+                              : isNotDetected
+                              ? 'Not Detected'
+                              : isSkipped
+                              ? 'Unsupported'
+                              : isFailed
+                              ? 'Failed'
+                              : 'Inconclusive';
 
                             return (
                               <button
@@ -1826,13 +1895,19 @@ export const CaseDetails: React.FC = () => {
                                     ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
                                     : isSkipped
                                     ? 'bg-stone-50 text-stone-600 border-stone-200 hover:bg-stone-100'
+                                    : isFailed
+                                    ? 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100'
                                     : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
                                 }`}
-                                title={auth.score_interpretation || "Click to view authenticity details"}
+                                title={auth.assessment_reason || auth.score_interpretation || "Click to view authenticity details"}
                               >
-                                <ShieldCheck className={`w-3 h-3 ${isSynthetic ? 'text-rose-600' : isNotDetected ? 'text-emerald-600' : 'text-stone-500'}`} />
-                                <span>{isSynthetic ? 'Synthetic' : isNotDetected ? 'Not Detected' : isSkipped ? 'Skipped' : 'Inconclusive'}</span>
-                                {score && <span className="font-mono text-[10px] opacity-80">({score})</span>}
+                                <ShieldCheck className={`w-3 h-3 ${isSynthetic ? 'text-rose-600' : isNotDetected ? 'text-emerald-600' : isFailed ? 'text-red-600' : 'text-stone-500'}`} />
+                                <span>{label}</span>
+                                {scoreText && (
+                                  <span className="font-mono text-[10px] opacity-80" title="AI-generated content score (uncalibrated detector score)">
+                                    ({scoreText})
+                                  </span>
+                                )}
                               </button>
                             );
                           })()}
@@ -3604,25 +3679,40 @@ export const CaseDetails: React.FC = () => {
               const auth = parsedMeta?.media_authenticity;
               if (!auth) return null;
 
-              const isSynthetic = auth.assessment === 'synthetic_indicators_detected';
-              const isNotDetected = auth.assessment === 'synthetic_indicators_not_detected';
-              const isSkipped = auth.processing_status === 'skipped';
+              const procStatus = String(auth.processing_status || '').toUpperCase();
+              const assStatus = String(auth.assessment_status || auth.assessment || '').toUpperCase();
+              const isSynthetic = assStatus === 'SYNTHETIC_INDICATORS_DETECTED' || assStatus === 'SYNTHETIC';
+              const isNotDetected = assStatus === 'NO_STRONG_SYNTHETIC_INDICATORS' || assStatus === 'NOT_DETECTED';
+              const isSkipped = procStatus === 'SKIPPED' || procStatus === 'UNSUPPORTED' || assStatus === 'UNSUPPORTED';
+              const isFailed = procStatus === 'FAILED' || assStatus === 'FAILED';
               const prov = auth.provenance || {};
 
+              const rawScore = auth.synthetic_score !== undefined && auth.synthetic_score !== null
+                ? auth.synthetic_score
+                : auth.raw_score !== undefined && auth.raw_score !== null
+                ? auth.raw_score
+                : null;
+              const hasScore = auth.inference_executed !== false && rawScore !== null && !isSkipped && !isFailed;
+              const scorePct = hasScore ? (rawScore * 100).toFixed(1) : null;
+              const modelLabel = auth.detector_model || auth.detector_name || auth.model_identifier || 'Media Authenticity Detector';
+              const modelVer = auth.model_version ? `v${auth.model_version}` : '';
+
               return (
-                <div className={`space-y-2 p-3 rounded border text-xs ${
+                <div className={`space-y-2.5 p-3.5 rounded-md border text-xs ${
                   isSynthetic
                     ? 'border-rose-300 bg-rose-50/50'
                     : isNotDetected
                     ? 'border-emerald-300 bg-emerald-50/40'
                     : isSkipped
                     ? 'border-stone-200 bg-stone-50'
+                    : isFailed
+                    ? 'border-red-300 bg-red-50/50'
                     : 'border-amber-300 bg-amber-50/50'
                 }`}>
                   <div className="flex items-center justify-between">
                     <span className="font-semibold text-[#1C1917] flex items-center gap-1.5">
-                      <ShieldCheck className={`w-4 h-4 ${isSynthetic ? 'text-rose-600' : isNotDetected ? 'text-emerald-600' : 'text-stone-500'}`} />
-                      Media Authenticity Assessment ({auth.model_identifier || 'Detector'})
+                      <ShieldCheck className={`w-4 h-4 ${isSynthetic ? 'text-rose-600' : isNotDetected ? 'text-emerald-600' : isFailed ? 'text-red-600' : 'text-stone-500'}`} />
+                      Authenticity Assessment &bull; <span className="font-mono text-stone-700">{modelLabel} {modelVer}</span>
                     </span>
                     <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
                       isSynthetic
@@ -3631,31 +3721,44 @@ export const CaseDetails: React.FC = () => {
                         ? 'bg-emerald-100 text-emerald-800'
                         : isSkipped
                         ? 'bg-stone-200 text-stone-700'
+                        : isFailed
+                        ? 'bg-red-100 text-red-800'
                         : 'bg-amber-100 text-amber-800'
                     }`}>
-                      {isSynthetic ? 'SYNTHETIC DETECTED' : isNotDetected ? 'NOT DETECTED' : isSkipped ? 'SKIPPED' : 'INCONCLUSIVE'}
+                      {isSynthetic ? 'SYNTHETIC DETECTED' : isNotDetected ? 'NOT DETECTED' : isSkipped ? 'UNSUPPORTED' : isFailed ? 'DETECTION FAILED' : 'INCONCLUSIVE'}
                     </span>
                   </div>
 
-                  {auth.raw_score !== null && auth.raw_score !== undefined && (
-                    <div className="flex items-center gap-3 text-stone-700">
-                      <div>
-                        <strong>Raw Score:</strong> <span className="font-mono">{auth.raw_score.toFixed(4)}</span> ({(auth.raw_score * 100).toFixed(1)}%)
+                  {hasScore && (
+                    <div className="bg-white/80 border border-stone-200 p-2.5 rounded space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="font-semibold text-[#1C1917] text-xs">
+                          AI-generated content score: <strong className={isSynthetic ? 'text-rose-700' : 'text-emerald-700'}>{scorePct}%</strong>
+                        </span>
+                        <span className="text-[10px] text-stone-500 font-mono">
+                          Raw Score: {rawScore.toFixed(4)} ({auth.score_type || 'uncalibrated'})
+                        </span>
                       </div>
-                      {auth.inference_time_ms && (
-                        <div>
-                          <strong>Latency:</strong> <span className="font-mono">{Math.round(auth.inference_time_ms)}ms</span>
-                        </div>
-                      )}
-                      <div>
-                        <strong>Device:</strong> <span className="font-mono uppercase">{auth.device_used || 'CPU'}</span>
+                      <div className="text-[10px] text-stone-500">
+                        {auth.calibrated_probability !== undefined && auth.calibrated_probability !== null ? (
+                          <span>Calibrated Probability: <strong>{(auth.calibrated_probability * 100).toFixed(1)}%</strong></span>
+                        ) : (
+                          <span>Notice: Score represents raw uncalibrated detector output, not a calibrated judicial probability.</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-3 text-[10px] text-stone-600 pt-0.5 border-t border-stone-100">
+                        {auth.inference_time_ms && (
+                          <span>Latency: <strong className="font-mono">{Math.round(auth.inference_time_ms)}ms</strong></span>
+                        )}
+                        <span>Device: <strong className="font-mono uppercase">{auth.device_used || 'CPU'}</strong></span>
+                        {auth.from_cache && <span className="text-[#0F766E] font-medium">&bull; Cached Result</span>}
                       </div>
                     </div>
                   )}
 
-                  {auth.score_interpretation && (
+                  {(auth.assessment_reason || auth.score_interpretation) && (
                     <p className="text-[#1C1917] leading-relaxed">
-                      <strong>Interpretation:</strong> {auth.score_interpretation}
+                      <strong>Assessment Reason:</strong> {auth.assessment_reason || auth.score_interpretation}
                     </p>
                   )}
 

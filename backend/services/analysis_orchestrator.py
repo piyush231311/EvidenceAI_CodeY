@@ -441,6 +441,13 @@ def _execute_job_pipeline(job_id: str, resume_from_stage: Optional[str] = None, 
                                         sha256=ev.sha256 or "",
                                     )
                                     auth_data = res.model_dump()
+                                    # Ensure contract consistency
+                                    auth_data["detector_model"] = getattr(res, "detector_model", "sentry-convnext-small")
+                                    auth_data["synthetic_score"] = getattr(res, "synthetic_score", res.raw_score)
+                                    auth_data["score_type"] = getattr(res, "score_type", "raw_uncalibrated_softmax")
+                                    auth_data["calibrated_probability"] = getattr(res, "calibrated_probability", None)
+                                    auth_data["assessment_status"] = getattr(res, "assessment_status", res.assessment)
+                                    auth_data["assessment_reason"] = getattr(res, "assessment_reason", res.score_interpretation)
                                     assessed_count += 1
                                 except Exception as exc:
                                     logger.warning(f"Image authenticity check failed for {ev.id}: {exc}")
@@ -448,11 +455,25 @@ def _execute_job_pipeline(job_id: str, resume_from_stage: Optional[str] = None, 
                                         "evidence_id": ev.id,
                                         "filename": ev.original_filename,
                                         "file_type": "image",
+                                        "detector_name": "sentry-convnext-small",
+                                        "detector_model": "sentry-convnext-small",
                                         "model_identifier": "sentry-convnext-small",
-                                        "model_version": "5.0",
-                                        "processing_status": "failed",
-                                        "assessment": "inconclusive",
-                                        "error_message": str(exc),
+                                        "model_version": "5.1.0",
+                                        "policy_version": "2.0.0",
+                                        "inference_executed": False,
+                                        "raw_model_output": None,
+                                        "synthetic_score": None,
+                                        "raw_score": None,
+                                        "score_type": "none",
+                                        "calibrated_probability": None,
+                                        "processing_status": "FAILED",
+                                        "assessment": "FAILED",
+                                        "assessment_status": "FAILED",
+                                        "score_interpretation": f"Detector encountered a runtime error: {exc}",
+                                        "assessment_reason": f"Detector encountered a runtime error: {exc}",
+                                        "decision_threshold": 0.50,
+                                        "from_cache": False,
+                                        "error_details": str(exc),
                                         "relevant_limitations": ["Detector encountered an unexpected processing error."],
                                     }
                             # Audio detection (PellaV2)
@@ -465,6 +486,13 @@ def _execute_job_pipeline(job_id: str, resume_from_stage: Optional[str] = None, 
                                         sha256=ev.sha256 or "",
                                     )
                                     auth_data = res.model_dump()
+                                    # Ensure contract consistency
+                                    auth_data["detector_model"] = getattr(res, "detector_model", "pellav2-audio-deepfake-detector")
+                                    auth_data["synthetic_score"] = getattr(res, "synthetic_score", res.raw_score)
+                                    auth_data["score_type"] = getattr(res, "score_type", "w2v_bert_window_aggregate")
+                                    auth_data["calibrated_probability"] = getattr(res, "calibrated_probability", None)
+                                    auth_data["assessment_status"] = getattr(res, "assessment_status", res.assessment)
+                                    auth_data["assessment_reason"] = getattr(res, "assessment_reason", res.score_interpretation)
                                     assessed_count += 1
                                 except Exception as exc:
                                     logger.warning(f"Audio authenticity check failed for {ev.id}: {exc}")
@@ -472,11 +500,25 @@ def _execute_job_pipeline(job_id: str, resume_from_stage: Optional[str] = None, 
                                         "evidence_id": ev.id,
                                         "filename": ev.original_filename,
                                         "file_type": "audio",
+                                        "detector_name": "pellav2-audio-deepfake-detector",
+                                        "detector_model": "pellav2-audio-deepfake-detector",
                                         "model_identifier": "pellav2-audio-deepfake-detector",
-                                        "model_version": "2.0",
-                                        "processing_status": "failed",
-                                        "assessment": "inconclusive",
-                                        "error_message": str(exc),
+                                        "model_version": "2.0.0",
+                                        "policy_version": "2.0.0",
+                                        "inference_executed": False,
+                                        "raw_model_output": None,
+                                        "synthetic_score": None,
+                                        "raw_score": None,
+                                        "score_type": "none",
+                                        "calibrated_probability": None,
+                                        "processing_status": "FAILED",
+                                        "assessment": "FAILED",
+                                        "assessment_status": "FAILED",
+                                        "score_interpretation": f"Detector encountered a runtime error: {exc}",
+                                        "assessment_reason": f"Detector encountered a runtime error: {exc}",
+                                        "decision_threshold": 0.50,
+                                        "from_cache": False,
+                                        "error_details": str(exc),
                                         "relevant_limitations": ["Detector encountered an unexpected processing error."],
                                     }
                             # Non-media evidence (documents, text files, csv, eml, etc.)
@@ -485,8 +527,24 @@ def _execute_job_pipeline(job_id: str, resume_from_stage: Optional[str] = None, 
                                     "evidence_id": ev.id,
                                     "filename": ev.original_filename,
                                     "file_type": ft or "document",
-                                    "processing_status": "skipped",
-                                    "assessment": "inconclusive",
+                                    "detector_name": "none",
+                                    "detector_model": "none",
+                                    "model_identifier": "none",
+                                    "model_version": "2.0.0",
+                                    "policy_version": "2.0.0",
+                                    "inference_executed": False,
+                                    "raw_model_output": None,
+                                    "synthetic_score": None,
+                                    "raw_score": None,
+                                    "score_type": "none",
+                                    "calibrated_probability": None,
+                                    "processing_status": "SKIPPED",
+                                    "assessment": "UNSUPPORTED",
+                                    "assessment_status": "UNSUPPORTED",
+                                    "score_interpretation": "Authenticity screening models are designed for image and audio media only.",
+                                    "assessment_reason": "Authenticity screening models are designed for image and audio media only.",
+                                    "decision_threshold": None,
+                                    "from_cache": False,
                                     "skip_reason": "unsupported_media_type",
                                     "relevant_limitations": [
                                         "Authenticity detector models are currently available for image and audio media."
@@ -497,11 +555,14 @@ def _execute_job_pipeline(job_id: str, resume_from_stage: Optional[str] = None, 
                             authenticity_map[ev.id] = auth_data
 
                             # Update Evidence model attributes
-                            if auth_data.get("raw_score") is not None:
-                                ev.authenticity_score = round(float(auth_data["raw_score"]), 4)
-                            # Synthetic warnings must NOT reject, delete, or suppress evidence items.
-                            ass_str = str(auth_data.get("assessment", "")).strip().lower()
-                            ev.authenticity_passed = (ass_str not in ["synthetic_indicators_detected", "synthetic_detected"])
+                            syn_val = auth_data.get("synthetic_score") if auth_data.get("synthetic_score") is not None else auth_data.get("raw_score")
+                            if syn_val is not None:
+                                ev.authenticity_score = round(float(syn_val), 4)
+                            else:
+                                ev.authenticity_score = None
+
+                            ass_upper = str(auth_data.get("assessment_status") or auth_data.get("assessment") or "").strip().upper()
+                            ev.authenticity_passed = (ass_upper not in ["SYNTHETIC_INDICATORS_DETECTED", "SYNTHETIC"])
 
                             # Store into extraction_metadata
                             try:
@@ -563,28 +624,38 @@ def _execute_job_pipeline(job_id: str, resume_from_stage: Optional[str] = None, 
 
                             # 2. Check automated authenticity detection results
                             auth = authenticity_map.get(ev.id, {})
-                            raw_assessment = auth.get("assessment") or "inconclusive"
-                            assessment_str = str(raw_assessment).lower().strip()
-                            raw_score = auth.get("raw_score")
+                            proc_status = str(auth.get("processing_status", "")).upper().strip()
+                            ass_status = str(auth.get("assessment_status") or auth.get("assessment") or "").upper().strip()
+                            raw_score = auth.get("synthetic_score") if auth.get("synthetic_score") is not None else auth.get("raw_score")
                             score_disp = f"{float(raw_score):.4f}" if raw_score is not None else "N/A"
 
+                            # Explicit, validated eligibility policy rule:
+                            # Only successfully evaluated files with confirmed synthetic indicators are flagged or quarantined!
+                            # Files with INCONCLUSIVE, UNSUPPORTED, SKIPPED, or FAILED status are NEVER quarantined!
                             is_synthetic = (
-                                assessment_str in ["synthetic_indicators_detected", "synthetic"] or
-                                (isinstance(raw_score, (int, float)) and raw_score >= 0.70)
+                                proc_status == "COMPLETED" and
+                                ass_status in ["SYNTHETIC_INDICATORS_DETECTED", "SYNTHETIC"]
                             )
 
                             if is_synthetic:
                                 if policy_mode == "STRICT_REVIEW":
                                     ev.review_status = "EXCLUDED_PENDING_REVIEW"
-                                    ev.quarantine_reason = f"Excluded by Strict Review policy (v1.0.0): Automated detection identified synthetic/AI generation ({score_disp}, assessment: {assessment_str}). Pending investigator review."
+                                    ev.quarantine_reason = (
+                                        f"Excluded by Strict Review policy (v2.0.0): Automated detection identified synthetic/AI generation "
+                                        f"({score_disp}, assessment: {ass_status}). Pending investigator review."
+                                    )
                                     quarantined_ids.append(ev.id)
                                     excluded_count += 1
-                                else:  # DEVELOPMENT policy mode
+                                else:  # STANDARD_REVIEW or DEVELOPMENT
                                     ev.review_status = "FLAGGED_FOR_REVIEW"
-                                    ev.quarantine_reason = f"Flagged by Development policy: Automated detection identified synthetic/AI generation ({score_disp}). Retained for test reconstruction."
+                                    ev.quarantine_reason = (
+                                        f"Flagged for Review: Automated detection identified synthetic/AI generation ({score_disp}). "
+                                        f"Retained for investigation with forensic disclaimers."
+                                    )
                                     eligible_ids.append(ev.id)
                                     flagged_count += 1
                             else:
+                                # Authentic, Inconclusive, Unsupported, Skipped, or Failed files remain INCLUDED
                                 ev.review_status = "INCLUDED"
                                 ev.quarantine_reason = None
                                 eligible_ids.append(ev.id)

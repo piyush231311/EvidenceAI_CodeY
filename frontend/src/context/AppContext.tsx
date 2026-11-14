@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { Case, EvidenceFile } from '../types';
 import { api } from '../services/api';
+import { useAuth } from './AuthContext';
 
 interface AppContextType {
   cases: Case[];
@@ -19,6 +20,7 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  const { isAuthenticated } = useAuth();
   const [cases, setCases] = useState<Case[]>([]);
   const [evidence, setEvidence] = useState<EvidenceFile[]>([]);
   const [activeCaseId, setActiveCaseId] = useState<string>('');
@@ -26,6 +28,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [error, setError] = useState<string | null>(null);
 
   const refreshData = async () => {
+    if (!isAuthenticated) {
+      setCases([]);
+      setEvidence([]);
+      setActiveCaseId('');
+      setIsLoading(false);
+      return;
+    }
+
     try {
       setIsLoading(true);
       setError(null);
@@ -56,15 +66,23 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       }
     } catch (err: any) {
       console.error('Failed to load data from database:', err);
-      setError('Unable to connect to local database server.');
+      setError(err?.message || 'Unable to connect to local database server.');
     } finally {
       setIsLoading(false);
     }
   };
 
   useEffect(() => {
-    refreshData();
-  }, []);
+    if (isAuthenticated) {
+      refreshData();
+    } else {
+      setCases([]);
+      setEvidence([]);
+      setActiveCaseId('');
+      setIsLoading(false);
+      setError(null);
+    }
+  }, [isAuthenticated]);
 
   const createCase = async (caseId?: string) => {
     const created = await api.createCase(caseId);

@@ -46,6 +46,7 @@ IMAGE_AUTH_CACHE_FILE = PROJECT_ROOT / "models_cache" / "image_authenticity_cach
 
 MODEL_IDENTIFIER = "sentry-convnext-small"
 MODEL_VERSION = "5.1.0"
+POLICY_VERSION = "2.0.0"
 SENTRY_HF_REPO = "InfImagine/Sentry_image_models"
 SENTRY_SUBPATH = "convnext_small_4xb256_fake5m_lr6e-4_10epoch/epoch_5.pth"
 
@@ -95,14 +96,22 @@ class ImageAuthenticityResult(BaseModel):
     filename: str
     modality: str = "image"
     detector_name: str = MODEL_IDENTIFIER
+    detector_model: str = MODEL_IDENTIFIER
     model_version: str = MODEL_VERSION
+    policy_version: str = POLICY_VERSION
     inference_executed: bool = False
-    raw_score: Optional[float] = None  # Probability of synthetic/AI content [0.0 - 1.0]
+    raw_score: Optional[float] = None  # Raw uncalibrated score [0.0 - 1.0]
+    synthetic_score: Optional[float] = None  # Explicit contract field for synthetic score
+    raw_model_output: Optional[Dict[str, Any]] = None  # Exact logits / window details
+    score_type: str = "raw_uncalibrated_softmax"  # Score interpretation type
+    calibrated_probability: Optional[float] = None  # None unless Platt/isotonic calibrated
     spatial_max_score: Optional[float] = None
     c2pa_ai_verified: bool = False
     score_interpretation: str = ""
+    assessment_reason: str = ""
     decision_threshold: float = 0.50
     assessment: CanonicalAssessment = "INCONCLUSIVE"
+    assessment_status: CanonicalAssessment = "INCONCLUSIVE"
     preprocessing_info: Dict[str, Any] = Field(default_factory=dict)
     is_screenshot: bool = False
     screenshot_type: Optional[str] = None  # e.g. "chat_screenshot", "document_scan", "photo"
@@ -114,6 +123,21 @@ class ImageAuthenticityResult(BaseModel):
     device_used: str = "cpu"
     from_cache: bool = False
     analyzed_at: datetime = Field(default_factory=datetime.utcnow)
+
+    def model_post_init(self, __context: Any) -> None:
+        if self.synthetic_score is None and self.raw_score is not None:
+            self.synthetic_score = self.raw_score
+        elif self.raw_score is None and self.synthetic_score is not None:
+            self.raw_score = self.synthetic_score
+        if not self.assessment_status or self.assessment_status == "INCONCLUSIVE":
+            if self.assessment != "INCONCLUSIVE":
+                self.assessment_status = self.assessment
+        if not self.assessment_reason and self.score_interpretation:
+            self.assessment_reason = self.score_interpretation
+        elif not self.score_interpretation and self.assessment_reason:
+            self.score_interpretation = self.assessment_reason
+        if not self.detector_model and self.detector_name:
+            self.detector_model = self.detector_name
 
     # Backward compatibility properties
     @property
@@ -270,7 +294,7 @@ def assess_image_authenticity(
     """
     path_obj = Path(image_path)
     fname = filename or path_obj.name
-    cache_key = f"{sha256}::{MODEL_IDENTIFIER}::{MODEL_VERSION}"
+    cache_key = f"{sha256}::{MODEL_IDENTIFIER}::{MODEL_VERSION}::p{POLICY_VERSION}"
 
     # 1. Check cache first unless force_refresh is requested
     if not force_refresh and sha256 and IMAGE_AUTH_CACHE_FILE.exists():
@@ -497,19 +521,36 @@ def assess_image_authenticity(
                 "normalization": "Sentry [123.675, 116.28, 103.53]/255",
             }
 
+            raw_output = {
+                "center_score": round(prob_fake, 4),
+                "spatial_max": round(spatial_max, 4),
+                "spatial_mean": round(spatial_mean, 4),
+                "spatial_patches_count": len(spatial_scores),
+                "c2pa_ai_declared": is_c2pa_ai,
+            }
+            score_type = "c2pa_cryptographic_assertion" if is_c2pa_ai else "raw_uncalibrated_softmax"
+
             res = ImageAuthenticityResult(
                 evidence_id=evidence_id,
                 filename=fname,
                 file_hash=sha256,
                 detector_name=MODEL_IDENTIFIER,
+                detector_model=MODEL_IDENTIFIER,
                 model_version=MODEL_VERSION,
+                policy_version=POLICY_VERSION,
                 inference_executed=True,
                 raw_score=final_score,
+                synthetic_score=final_score,
+                raw_model_output=raw_output,
+                score_type=score_type,
+                calibrated_probability=None,
                 spatial_max_score=round(spatial_max, 4),
                 c2pa_ai_verified=is_c2pa_ai,
                 score_interpretation=interp,
+                assessment_reason=interp,
                 decision_threshold=0.50,
                 assessment=assessment,
+                assessment_status=assessment,
                 preprocessing_info=prep_info,
                 is_screenshot=is_screenshot,
                 screenshot_type=screenshot_ctx,

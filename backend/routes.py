@@ -8,12 +8,13 @@ from datetime import datetime
 from typing import List, Optional, Any, Dict
 from pathlib import Path
 from pydantic import BaseModel
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse
 from sqlalchemy.orm import Session
 
 from .db import get_db
 from .models import (
+    User, UserSession, UserResponse, LoginPayload, AuthStatusResponse, DemoCredentialsResponse,
     Case, Evidence, AuditLog, EntityMatchRecord,
     EventRecord, EventContradictionRecord, ClarificationQuestionRecord,
     UserAnswerRecord, ReconstructedReportRecord, MVPAnalysisRecord,
@@ -27,8 +28,99 @@ from .models import (
     AnalysisStageResponse, AnalysisJobResponse
 )
 from .authenticity import run_authenticity_gate
+from .auth import (
+    hash_password, verify_password, create_user_session, invalidate_user_session,
+    get_current_user, get_current_user_optional, SESSION_COOKIE_NAME, SESSION_MAX_AGE_SECONDS
+)
 
 router = APIRouter(prefix="/api", tags=["Evidence & Cases"])
+
+
+def check_case_access(case: Optional[Case], user: Optional[User] = None) -> Case:
+    """Verifies that the requested case exists and belongs to the authenticated user."""
+    if not case:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Case not found.")
+    if isinstance(user, User):
+        if case.owner_id != user.id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Case not found.")
+    return case
+
+
+# =====================================================================
+# AUTHENTICATION ENDPOINTS
+# =====================================================================
+
+@router.post("/auth/login")
+def login(payload: LoginPayload, response: Response, db: Session = Depends(get_db)):
+    """Authenticate with email and password, setting an HTTP-only session cookie."""
+    user = db.query(User).filter(User.email == payload.email.strip().lower()).first()
+    if not user or not user.is_active or not verify_password(payload.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password."
+        )
+
+    session = create_user_session(db, user.id)
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=session.id,
+        httponly=True,
+        samesite="lax",
+        max_age=SESSION_MAX_AGE_SECONDS,
+        path="/"
+    )
+    return {
+        "authenticated": True,
+        "token": session.id,
+        "user": UserResponse.model_validate(user)
+    }
+
+
+@router.post("/auth/logout")
+def logout(
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db)
+):
+    """Invalidate session and clear HTTP-only cookie."""
+    token = request.cookies.get(SESSION_COOKIE_NAME)
+    if not token:
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header[7:].strip()
+
+    if token:
+        invalidate_user_session(db, token)
+
+    response.delete_cookie(key=SESSION_COOKIE_NAME, path="/")
+    return {"message": "Logged out successfully"}
+
+
+@router.get("/auth/me")
+def get_me(current_user: User = Depends(get_current_user)):
+    """Return currently authenticated user profile."""
+    return {
+        "authenticated": True,
+        "user": UserResponse.model_validate(current_user)
+    }
+
+
+@router.get("/auth/demo-credentials")
+def get_demo_credentials():
+    """Return public demo credentials if running in development mode."""
+    env = os.getenv("ENV", "development").lower()
+    if env == "production":
+        return {
+            "enabled": False,
+            "email": "",
+            "password": ""
+        }
+    return {
+        "enabled": True,
+        "email": "demo@evidenceai.local",
+        "password": "DemoUser123!"
+    }
+
 
 # Maximum file size: 50 MB
 MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024
@@ -126,7 +218,8 @@ async def upload_evidence(
     files: List[UploadFile] = File(...),
     notes: Optional[str] = Form(None),
     notes_map: Optional[str] = Form(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Upload one or more evidence files for a case:
@@ -150,9 +243,12 @@ async def upload_evidence(
 
     case = db.query(Case).filter(Case.id == case_id).first()
     if not case:
-        case = Case(id=case_id)
+        owner_id = current_user.id if isinstance(current_user, User) else None
+        case = Case(id=case_id, owner_id=owner_id)
         db.add(case)
         db.flush()
+    else:
+        check_case_access(case, current_user)
 
     case_storage_dir = STORAGE_BASE_DIR / case_id
     case_storage_dir.mkdir(parents=True, exist_ok=True)
@@ -249,6 +345,7 @@ async def upload_evidence(
 @router.post("/extract")
 async def extract_direct(
     file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Direct extraction endpoint for ad-hoc or testing requests:
@@ -310,6 +407,8 @@ def trigger_evidence_extraction(evidence_id: str, db: Session = Depends(get_db))
     record = db.query(Evidence).filter(Evidence.id == evidence_id).first()
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Evidence not found.")
+    case = db.query(Case).filter(Case.id == record.case_id).first()
+    check_case_access(case, current_user)
 
     file_path = Path(record.stored_path)
     if not file_path.exists():
@@ -339,10 +438,12 @@ def trigger_evidence_extraction(evidence_id: str, db: Session = Depends(get_db))
 
 
 @router.get("/cases/{case_id}/evidence", response_model=List[EvidenceResponse])
-def get_case_evidence(case_id: str, db: Session = Depends(get_db)):
+def get_case_evidence(case_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Returns all evidence records for the specified case, ordered chronologically.
     """
+    case = db.query(Case).filter(Case.id == case_id).first()
+    check_case_access(case, current_user)
     evidence_items = (
         db.query(Evidence)
         .filter(Evidence.case_id == case_id)
@@ -353,13 +454,15 @@ def get_case_evidence(case_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/evidence/{evidence_id}/file")
-def stream_evidence_file(evidence_id: str, db: Session = Depends(get_db)):
+def stream_evidence_file(evidence_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Streams back the original untouched file from local storage.
     """
     record = db.query(Evidence).filter(Evidence.id == evidence_id).first()
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Evidence not found.")
+    case = db.query(Case).filter(Case.id == record.case_id).first()
+    check_case_access(case, current_user)
 
     file_path = Path(record.stored_path)
     if not file_path.exists():
@@ -373,7 +476,7 @@ def stream_evidence_file(evidence_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/cases/{case_id}/audit-logs", response_model=List[AuditLogResponse])
-def get_case_audit_logs(case_id: str, db: Session = Depends(get_db)):
+def get_case_audit_logs(case_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Returns append-only audit log entries for a case to verify forensic traceability.
     """
@@ -403,8 +506,10 @@ def get_case_audit_logs(case_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/cases", response_model=List[CaseResponse])
-def list_cases(db: Session = Depends(get_db)):
-    """List all cases."""
+def list_cases(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """List cases owned by the authenticated user."""
+    if isinstance(current_user, User):
+        return db.query(Case).filter(Case.owner_id == current_user.id).order_by(Case.created_at.desc()).all()
     return db.query(Case).order_by(Case.created_at.desc()).all()
 
 
@@ -413,13 +518,20 @@ class CreateCasePayload(BaseModel):
 
 
 @router.post("/cases", response_model=CaseResponse, status_code=status.HTTP_201_CREATED)
-def create_case(payload: Optional[CreateCasePayload] = None, db: Session = Depends(get_db)):
-    """Create a new case with an optional specified ID or auto-generated UUID."""
+def create_case(
+    payload: Optional[CreateCasePayload] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Create a new case with an optional specified ID or auto-generated UUID for the authenticated user."""
     case_id = (payload.id.strip() if payload and payload.id else None) or str(uuid.uuid4())
     existing = db.query(Case).filter(Case.id == case_id).first()
     if existing:
+        if isinstance(current_user, User) and existing.owner_id and existing.owner_id != current_user.id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Case already exists under another owner.")
         return existing
-    case = Case(id=case_id)
+    owner_id = current_user.id if isinstance(current_user, User) else None
+    case = Case(id=case_id, owner_id=owner_id)
     db.add(case)
     db.commit()
     db.refresh(case)
@@ -427,35 +539,44 @@ def create_case(payload: Optional[CreateCasePayload] = None, db: Session = Depen
 
 
 @router.delete("/cases/{case_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_case(case_id: str, db: Session = Depends(get_db)):
+def delete_case(case_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Delete a case and its associated evidence."""
     case = db.query(Case).filter(Case.id == case_id).first()
-    if not case:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Case not found.")
+    check_case_access(case, current_user)
     db.delete(case)
     db.commit()
     return None
 
 
 @router.get("/evidence", response_model=List[EvidenceResponse])
-def list_all_evidence(db: Session = Depends(get_db)):
-    """List all evidence across cases."""
+def list_all_evidence(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """List all evidence across cases owned by the authenticated user."""
+    if isinstance(current_user, User):
+        return (
+            db.query(Evidence)
+            .join(Case, Evidence.case_id == Case.id)
+            .filter(Case.owner_id == current_user.id)
+            .order_by(Evidence.uploaded_at.desc())
+            .all()
+        )
     return db.query(Evidence).order_by(Evidence.uploaded_at.desc()).all()
 
 
 @router.delete("/evidence/{evidence_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_evidence(evidence_id: str, db: Session = Depends(get_db)):
+def delete_evidence(evidence_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Delete an evidence record."""
     item = db.query(Evidence).filter(Evidence.id == evidence_id).first()
     if not item:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Evidence not found.")
+    case = db.query(Case).filter(Case.id == item.case_id).first()
+    check_case_access(case, current_user)
     db.delete(item)
     db.commit()
     return None
 
 
 @router.post("/cases/{case_id}/extract-all", response_model=List[EvidenceResponse])
-def extract_all_case_evidence(case_id: str, db: Session = Depends(get_db)):
+def extract_all_case_evidence(case_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Trigger extraction across all evidence items in a case.
     Reuses existing extracted results unless empty.
@@ -635,7 +756,7 @@ def run_case_entity_matching(case_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/cases/{case_id}/entities", response_model=List[CandidateMatchResponse])
-def get_case_entities(case_id: str, db: Session = Depends(get_db)):
+def get_case_entities(case_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Returns stored candidate entity matches for a case.
     """
@@ -789,14 +910,14 @@ def review_entity_match(
 # =====================================================================
 
 @router.get("/system/ollama")
-def get_ollama_runtime_status():
+def get_ollama_runtime_status(current_user: User = Depends(get_current_user)):
     """Inspects the local Ollama LLM runtime and configured Qwen model."""
     from src.intelligence.event_extractor import check_ollama_status
     return check_ollama_status()
 
 
 @router.post("/cases/{case_id}/events/extract", response_model=List[EventCandidateResponse])
-def extract_case_events(case_id: str, db: Session = Depends(get_db)):
+def extract_case_events(case_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Extracts structured event candidates across all case evidence using local Qwen.
     Strictly preserves modality, tense (plans != completed events), and source citations.
@@ -937,7 +1058,7 @@ def extract_case_events(case_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/cases/{case_id}/events", response_model=List[EventCandidateResponse])
-def get_case_events(case_id: str, db: Session = Depends(get_db)):
+def get_case_events(case_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Returns stored event candidates for a case."""
     records = db.query(EventRecord).filter(EventRecord.case_id == case_id).order_by(EventRecord.created_at.desc()).all()
     result = []
@@ -970,7 +1091,7 @@ def get_case_events(case_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/cases/{case_id}/timeline", response_model=TimelineResponse)
-def get_case_timeline(case_id: str, db: Session = Depends(get_db)):
+def get_case_timeline(case_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Computes a chronological timeline from event candidates, separates unscheduled events,
     annotates corroborations/contradictions, and applies user clarifications.
@@ -1063,7 +1184,7 @@ def get_case_timeline(case_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/cases/{case_id}/contradictions", response_model=List[ContradictionResponse])
-def get_case_contradictions(case_id: str, db: Session = Depends(get_db)):
+def get_case_contradictions(case_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Returns detected contradictions across evidence files."""
     records = db.query(EventContradictionRecord).filter(EventContradictionRecord.case_id == case_id).all()
     result = []
@@ -1209,7 +1330,7 @@ def get_case_quiz(case_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/cases/{case_id}/understanding", response_model=PreliminaryCaseUnderstandingResponse)
-def get_case_understanding(case_id: str, db: Session = Depends(get_db)):
+def get_case_understanding(case_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Returns preliminary case understanding ('What we understand so far'):
     key parties, established facts, proposed/planned actions, claims/allegations, and discrepancies.
@@ -1812,7 +1933,8 @@ def update_evidence_quarantine_endpoint(
 def start_case_analysis_endpoint(
     case_id: str,
     payload: Optional[StartAnalysisPayload] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Trigger the one-click end-to-end investigative analysis pipeline.
@@ -1823,8 +1945,7 @@ def start_case_analysis_endpoint(
         create_analysis_job, start_orchestrated_analysis, get_job_with_stages
     )
     case = db.query(Case).filter(Case.id == case_id).first()
-    if not case:
-        raise HTTPException(status_code=404, detail="Case not found.")
+    check_case_access(case, current_user)
 
     evidence_count = db.query(Evidence).filter(Evidence.case_id == case_id).count()
     if evidence_count == 0:
@@ -1841,7 +1962,9 @@ def start_case_analysis_endpoint(
 
 
 @router.get("/cases/{case_id}/analysis/active-job")
-def get_active_case_job_endpoint(case_id: str):
+def get_active_case_job_endpoint(case_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    case = db.query(Case).filter(Case.id == case_id).first()
+    check_case_access(case, current_user)
     """
     Returns the active (or latest) job for a case to restore UI state across refreshes.
     Returns None if no job exists for the case.
@@ -1852,7 +1975,7 @@ def get_active_case_job_endpoint(case_id: str):
 
 
 @router.get("/analysis/jobs/{job_id}")
-def get_analysis_job_endpoint(job_id: str):
+def get_analysis_job_endpoint(job_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Returns the current execution state, progress percentage, and stage info of an analysis job.
     """
@@ -1860,11 +1983,13 @@ def get_analysis_job_endpoint(job_id: str):
     job_data = get_job_with_stages(job_id)
     if not job_data:
         raise HTTPException(status_code=404, detail="Analysis job not found.")
+    case = db.query(Case).filter(Case.id == job_data.get("case_id")).first()
+    check_case_access(case, current_user)
     return job_data
 
 
 @router.get("/analysis/jobs/{job_id}/stages")
-def get_analysis_job_stages_endpoint(job_id: str):
+def get_analysis_job_stages_endpoint(job_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Returns detailed progression status, timestamps, and duration for all 15 stages.
     """
@@ -1872,11 +1997,13 @@ def get_analysis_job_stages_endpoint(job_id: str):
     job_data = get_job_with_stages(job_id)
     if not job_data:
         raise HTTPException(status_code=404, detail="Analysis job not found.")
+    case = db.query(Case).filter(Case.id == job_data.get("case_id")).first()
+    check_case_access(case, current_user)
     return job_data.get("stages", [])
 
 
 @router.get("/analysis/jobs/{job_id}/result")
-def get_analysis_job_result_endpoint(job_id: str):
+def get_analysis_job_result_endpoint(job_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Returns the analytical artifacts generated by the job (preliminary story or final report).
     """
@@ -1884,6 +2011,8 @@ def get_analysis_job_result_endpoint(job_id: str):
     job_data = get_job_with_stages(job_id)
     if not job_data:
         raise HTTPException(status_code=404, detail="Analysis job not found.")
+    case = db.query(Case).filter(Case.id == job_data.get("case_id")).first()
+    check_case_access(case, current_user)
     return {
         "job_id": job_id,
         "case_id": job_data["case_id"],
