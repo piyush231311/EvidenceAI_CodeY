@@ -30,6 +30,7 @@ backend/storage/
 
 # Temporary test artifacts
 test_files/
+*.zip
 
 # OS and editor files
 .DS_Store
