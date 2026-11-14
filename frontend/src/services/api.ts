@@ -101,5 +101,47 @@ export const api = {
 
   getFileUrl(evidenceId: string): string {
     return `${API_BASE}/evidence/${evidenceId}/file`;
+  },
+
+  // Extraction
+  async triggerExtraction(evidenceId: string): Promise<ApiEvidence> {
+    const res = await fetch(`${API_BASE}/evidence/${evidenceId}/extract`, {
+      method: 'POST'
+    });
+    if (!res.ok) throw new Error('Failed to run evidence extraction');
+    return res.json();
+  },
+
+  async extractAllCaseEvidence(caseId: string): Promise<ApiEvidence[]> {
+    const res = await fetch(`${API_BASE}/cases/${caseId}/extract-all`, {
+      method: 'POST'
+    });
+    if (!res.ok) throw new Error('Failed to run batch extraction');
+    return res.json();
+  },
+
+  // Entity Intelligence & Cross-Evidence Matching
+  async getCaseEntities(caseId: string) {
+    const res = await fetch(`${API_BASE}/cases/${caseId}/entities`);
+    if (!res.ok) throw new Error('Failed to load case entities');
+    return res.json();
+  },
+
+  async matchCaseEntities(caseId: string) {
+    const res = await fetch(`${API_BASE}/cases/${caseId}/entities/match`, {
+      method: 'POST'
+    });
+    if (!res.ok) throw new Error('Failed to run entity matching');
+    return res.json();
+  },
+
+  async reviewEntityMatch(matchId: string, action: 'confirm' | 'reject' | 'separate' | 'undo', notes?: string) {
+    const res = await fetch(`${API_BASE}/entities/matches/${matchId}/review`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, review_notes: notes })
+    });
+    if (!res.ok) throw new Error('Failed to submit review');
+    return res.json();
   }
 };

@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Download, Trash2, Copy, Check, Upload, Files } from 'lucide-react';
+import { Search, Download, Trash2, Copy, Check, Upload, Files, Eye, Zap } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { api } from '../services/api';
 import { EvidenceFile } from '../types';
 import { Button } from '../components/common/Button';
 import { ConfirmDialog } from '../components/common/ConfirmDialog';
+import { Modal } from '../components/common/Modal';
 
 export const EvidenceVault: React.FC = () => {
   const navigate = useNavigate();
@@ -14,6 +15,7 @@ export const EvidenceVault: React.FC = () => {
   const [search, setSearch] = useState<string>('');
   const [copiedHash, setCopiedHash] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<EvidenceFile | null>(null);
+  const [viewingFile, setViewingFile] = useState<EvidenceFile | null>(null);
 
   const formatBytes = (bytes: number) => {
     if (bytes === 0) return '0 B';
@@ -53,7 +55,7 @@ export const EvidenceVault: React.FC = () => {
         <div>
           <h1 className="text-lg font-semibold text-[#1C1917]">Evidence</h1>
           <p className="text-xs text-[#6B6862] mt-0.5">
-            All preserved files across your cases with SHA-256 fingerprints.
+            All preserved files across your cases with SHA-256 fingerprints and AI extraction intelligence.
           </p>
         </div>
 
@@ -85,7 +87,7 @@ export const EvidenceVault: React.FC = () => {
           <Files className="w-8 h-8 text-[#9C9890] mx-auto mb-2" />
           <h3 className="text-sm font-semibold text-[#1C1917] mb-1">No evidence added yet</h3>
           <p className="text-xs text-[#6B6862] mb-4">
-            Upload images, voice recordings, or text exports to preserve them securely.
+            Upload images, voice recordings, PDFs, DOCX, or text exports to preserve them securely.
           </p>
           <Button variant="primary" size="sm" onClick={() => navigate('/upload')}>
             Add evidence
@@ -104,8 +106,8 @@ export const EvidenceVault: React.FC = () => {
                 <th className="py-2.5 px-4 font-medium">Case</th>
                 <th className="py-2.5 px-4 font-medium">Type</th>
                 <th className="py-2.5 px-4 font-medium">Size</th>
-                <th className="py-2.5 px-4 font-medium">SHA-256 hash</th>
-                <th className="py-2.5 px-4 font-medium">Notes</th>
+                <th className="py-2.5 px-4 font-medium">SHA-256</th>
+                <th className="py-2.5 px-4 font-medium">Extraction</th>
                 <th className="py-2.5 px-4 font-medium text-right">Actions</th>
               </tr>
             </thead>
@@ -113,6 +115,7 @@ export const EvidenceVault: React.FC = () => {
               {filteredEvidence.map((file) => {
                 const truncatedHash = `${file.sha256.substring(0, 8)}...${file.sha256.substring(file.sha256.length - 6)}`;
                 const isCopied = copiedHash === file.id;
+                const hasExtractedText = Boolean(file.extracted_text && file.extracted_text.trim());
 
                 return (
                   <tr key={file.id} className="hover:bg-[#F9F9F7] transition-colors">
@@ -123,8 +126,9 @@ export const EvidenceVault: React.FC = () => {
                       <button
                         onClick={() => navigate(`/cases/${file.case_id}`)}
                         className="font-mono text-xs text-[#0F766E] hover:underline"
+                        title="Go to case details"
                       >
-                        {file.case_id.substring(0, 10)}...
+                        {file.case_id.substring(0, 8)}...
                       </button>
                     </td>
                     <td className="py-3 px-4 text-[#6B6862] uppercase text-[11px]">
@@ -143,11 +147,40 @@ export const EvidenceVault: React.FC = () => {
                         {isCopied ? <Check className="w-3 h-3 text-[#0F766E]" /> : <Copy className="w-3 h-3 text-[#9C9890]" />}
                       </button>
                     </td>
-                    <td className="py-3 px-4 text-[#6B6862] max-w-xs truncate">
-                      {file.notes || '—'}
+
+                    {/* Extraction status */}
+                    <td className="py-3 px-4">
+                      {hasExtractedText ? (
+                        <button
+                          onClick={() => setViewingFile(file)}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200 transition-colors font-medium"
+                          title="Click to view extracted text"
+                        >
+                          <Eye className="w-3 h-3 text-emerald-600" />
+                          <span>Extracted ({((file.extraction_confidence ?? 1.0) * 100).toFixed(0)}%)</span>
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => navigate(`/cases/${file.case_id}`)}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-stone-100 text-stone-600 hover:bg-stone-200 transition-colors font-medium"
+                        >
+                          <Zap className="w-3 h-3 text-amber-600" />
+                          <span>Run in Case</span>
+                        </button>
+                      )}
                     </td>
+
                     <td className="py-3 px-4 text-right">
                       <div className="inline-flex items-center gap-2">
+                        {hasExtractedText && (
+                          <button
+                            onClick={() => setViewingFile(file)}
+                            className="p-1 text-[#6B6862] hover:text-[#0F766E] rounded hover:bg-stone-100"
+                            title="View extracted text"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                         <a
                           href={api.getFileUrl(file.id)}
                           download={file.original_filename}
@@ -171,6 +204,43 @@ export const EvidenceVault: React.FC = () => {
             </tbody>
           </table>
         </div>
+      )}
+
+      {/* View Extracted Text Modal */}
+      {viewingFile && (
+        <Modal
+          isOpen={true}
+          onClose={() => setViewingFile(null)}
+          title={`Extracted Text — ${viewingFile.original_filename}`}
+        >
+          <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
+            <div className="flex items-center justify-between text-xs text-[#6B6862]">
+              <span className="font-mono bg-stone-100 px-2 py-0.5 rounded">
+                Case: {viewingFile.case_id}
+              </span>
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(viewingFile.extracted_text || '');
+                  alert('Copied text to clipboard');
+                }}
+                className="inline-flex items-center gap-1 hover:text-[#1C1917]"
+              >
+                <Copy className="w-3 h-3" />
+                <span>Copy</span>
+              </button>
+            </div>
+
+            <div className="bg-stone-50 border border-[#E6E4DF] rounded p-3 font-mono text-xs whitespace-pre-wrap text-[#1C1917] max-h-80 overflow-y-auto leading-relaxed">
+              {viewingFile.extracted_text || 'No text extracted.'}
+            </div>
+
+            <div className="flex justify-end pt-2 border-t border-[#E6E4DF]">
+              <Button variant="primary" size="sm" onClick={() => setViewingFile(null)}>
+                Close
+              </Button>
+            </div>
+          </div>
+        </Modal>
       )}
 
       {/* Delete Confirmation Dialog */}

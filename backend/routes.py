@@ -4,6 +4,7 @@ import uuid
 import hashlib
 import tempfile
 import time
+from datetime import datetime
 from typing import List, Optional, Any, Dict
 from pathlib import Path
 from pydantic import BaseModel
@@ -12,7 +13,11 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from .db import get_db
-from .models import Case, Evidence, AuditLog, EvidenceResponse, CaseResponse, AuditLogResponse
+from .models import (
+    Case, Evidence, AuditLog, EntityMatchRecord,
+    EvidenceResponse, CaseResponse, AuditLogResponse,
+    CandidateMatchResponse, ReviewMatchPayload, EntityMentionSchema
+)
 from .authenticity import run_authenticity_gate
 
 router = APIRouter(prefix="/api", tags=["Evidence & Cases"])
@@ -30,10 +35,11 @@ ALLOWED_AUDIO_MIMES = {
     "audio/m4a", "audio/x-m4a", "audio/mp4", "audio/ogg", "application/ogg"
 }
 
-ALLOWED_TEXT_EXTENSIONS = {".txt", ".json", ".csv", ".eml", ".pdf"}
+ALLOWED_TEXT_EXTENSIONS = {".txt", ".json", ".csv", ".eml", ".pdf", ".docx"}
 ALLOWED_TEXT_MIMES = {
     "text/plain", "application/json", "text/csv", "application/csv",
-    "message/rfc822", "application/pdf", "text/x-csv", "application/octet-stream"
+    "message/rfc822", "application/pdf", "text/x-csv", "application/octet-stream",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 }
 
 STORAGE_BASE_DIR = Path("storage") / "originals"
@@ -81,65 +87,29 @@ def classify_file(filename: str, content_type: Optional[str]) -> str:
 
 def run_pipeline_extraction(file_path: str, file_category: str) -> Dict[str, Any]:
     """
-    Runs extraction pipeline based on file category:
-    - image: PaddleOCR (PP-OCRv6 small)
-    - audio: Faster-Whisper Small (lazy loaded)
-    - text:  Document & Log Text Extractor
+    Runs unified extraction pipeline based on file category and extension.
+    Uses lazy loading and singleton model caching.
     """
-    result = {
-        "text": "",
-        "confidence": 0.0,
-        "metadata": {},
-        "processing_time_ms": 0.0,
-        "timestamps": [],
-        "success": False,
-    }
-
     try:
-        if file_category == "image":
-            from src.extraction.ocr import extract_text_from_image
-            ocr_out = extract_text_from_image(file_path)
-            result["text"] = ocr_out.get("text", "")
-            result["confidence"] = ocr_out.get("confidence", 0.0)
-            result["processing_time_ms"] = ocr_out.get("processing_time_ms", 0.0)
-            result["metadata"] = {
-                "lines": ocr_out.get("lines", []),
-                "engine": "PaddleOCR PP-OCRv6_small",
-            }
-            result["success"] = True
-
-        elif file_category == "audio":
-            from src.extraction.transcription import transcribe_audio
-            audio_out = transcribe_audio(file_path)
-            result["text"] = audio_out.get("text", "")
-            result["confidence"] = audio_out.get("language_probability", 0.0)
-            result["processing_time_ms"] = audio_out.get("processing_time_ms", 0.0)
-            result["timestamps"] = audio_out.get("segments", [])
-            result["metadata"] = {
-                "language": audio_out.get("language"),
-                "duration": audio_out.get("duration"),
-                "segments": audio_out.get("segments", []),
-                "engine": "Faster-Whisper Small",
-            }
-            result["success"] = True
-
-        elif file_category == "text":
-            from src.extraction.text_extractor import extract_text_from_document
-            doc_out = extract_text_from_document(file_path)
-            result["text"] = doc_out.get("text", "")
-            result["confidence"] = doc_out.get("confidence", 1.0)
-            result["processing_time_ms"] = doc_out.get("processing_time_ms", 0.0)
-            result["metadata"] = {
-                "doc_metadata": doc_out.get("metadata", {}),
-                "engine": "Document Text Extractor",
-            }
-            result["success"] = True
-
+        from src.extraction.unified_pipeline import process_evidence
+        record = process_evidence(file_path, file_category=file_category)
+        return {
+            "text": record.full_text,
+            "confidence": record.overall_confidence,
+            "metadata": record.metadata,
+            "processing_time_ms": record.processing_time_ms,
+            "timestamps": [s.model_dump() for s in record.segments],
+            "success": record.success,
+        }
     except Exception as e:
-        result["metadata"] = {"error": str(e)}
-        result["success"] = False
-
-    return result
+        return {
+            "text": "",
+            "confidence": 0.0,
+            "metadata": {"error": str(e)},
+            "processing_time_ms": 0.0,
+            "timestamps": [],
+            "success": False,
+        }
 
 
 @router.post("/cases/{case_id}/evidence", response_model=List[EvidenceResponse], status_code=status.HTTP_201_CREATED)
@@ -474,4 +444,261 @@ def delete_evidence(evidence_id: str, db: Session = Depends(get_db)):
     db.delete(item)
     db.commit()
     return None
+
+
+@router.post("/cases/{case_id}/extract-all", response_model=List[EvidenceResponse])
+def extract_all_case_evidence(case_id: str, db: Session = Depends(get_db)):
+    """
+    Trigger extraction across all evidence items in a case.
+    Reuses existing extracted results unless empty.
+    """
+    items = db.query(Evidence).filter(Evidence.case_id == case_id).all()
+    if not items:
+        return []
+
+    updated_items = []
+    for record in items:
+        file_path = Path(record.stored_path)
+        if not file_path.exists():
+            continue
+
+        ext_res = run_pipeline_extraction(str(file_path), record.file_type)
+        record.extracted_text = ext_res.get("text")
+        record.extraction_confidence = ext_res.get("confidence")
+        record.extraction_metadata = json.dumps(ext_res.get("metadata", {}))
+        record.processing_time_ms = ext_res.get("processing_time_ms")
+
+        audit_entry = AuditLog(
+            id=str(uuid.uuid4()),
+            case_id=record.case_id,
+            evidence_id=record.id,
+            action="EXTRACTION_COMPUTED",
+            details=json.dumps({
+                "processing_time_ms": ext_res.get("processing_time_ms"),
+                "confidence": ext_res.get("confidence"),
+                "file_type": record.file_type,
+            })
+        )
+        db.add(audit_entry)
+        updated_items.append(record)
+
+    db.commit()
+    for item in updated_items:
+        db.refresh(item)
+    return updated_items
+
+
+@router.post("/cases/{case_id}/entities/match", response_model=List[CandidateMatchResponse])
+def run_case_entity_matching(case_id: str, db: Session = Depends(get_db)):
+    """
+    Runs GLiNER entity extraction on all case evidence text, then uses RapidFuzz
+    to propose cross-evidence candidate entity matches for human review.
+    """
+    evidence_items = db.query(Evidence).filter(Evidence.case_id == case_id).all()
+    if not evidence_items:
+        return []
+
+    # Ensure evidence has extracted text
+    from src.intelligence.gliner_extractor import extract_entities_from_text, ExtractedEntity
+    from src.intelligence.entity_matcher import generate_candidate_matches
+
+    all_entities: List[ExtractedEntity] = []
+
+    for ev in evidence_items:
+        # Run extraction if text is not already present
+        if not ev.extracted_text:
+            file_path = Path(ev.stored_path)
+            if file_path.exists():
+                ext_res = run_pipeline_extraction(str(file_path), ev.file_type)
+                ev.extracted_text = ext_res.get("text")
+                ev.extraction_confidence = ext_res.get("confidence")
+                ev.extraction_metadata = json.dumps(ext_res.get("metadata", {}))
+                ev.processing_time_ms = ext_res.get("processing_time_ms")
+                db.flush()
+
+        if ev.extracted_text and ev.extracted_text.strip():
+            ents = extract_entities_from_text(
+                ev.extracted_text,
+                evidence_id=ev.id,
+                filename=ev.original_filename,
+            )
+            all_entities.extend(ents)
+
+    # Generate candidate matches across all evidence
+    candidate_matches = generate_candidate_matches(all_entities, case_id=case_id)
+
+    # Fetch existing confirmed/rejected statuses to preserve user reviews
+    existing_records = {
+        (rec.entity_type, rec.canonical_name): rec
+        for rec in db.query(EntityMatchRecord).filter(EntityMatchRecord.case_id == case_id).all()
+    }
+
+    response_list: List[CandidateMatchResponse] = []
+
+    for cand in candidate_matches:
+        key = (cand.entity_type, cand.canonical_name)
+        existing = existing_records.get(key)
+
+        mentions_data = [m.model_dump() for m in cand.mentions]
+
+        if existing:
+            # Preserve existing user decision if already reviewed
+            cand_id = existing.id
+            cand_status = existing.status
+            reviewed_at = existing.reviewed_at
+            review_notes = existing.review_notes
+            # Update mentions and score
+            existing.mentions_json = json.dumps(mentions_data)
+            existing.similarity_score = cand.similarity_score
+        else:
+            cand_id = cand.match_id
+            cand_status = "pending"
+            reviewed_at = None
+            review_notes = None
+
+            new_rec = EntityMatchRecord(
+                id=cand_id,
+                case_id=case_id,
+                entity_type=cand.entity_type,
+                canonical_name=cand.canonical_name,
+                similarity_score=cand.similarity_score,
+                status=cand_status,
+                mentions_json=json.dumps(mentions_data),
+            )
+            db.add(new_rec)
+
+        response_list.append(
+            CandidateMatchResponse(
+                id=cand_id,
+                case_id=case_id,
+                entity_type=cand.entity_type,
+                canonical_name=cand.canonical_name,
+                similarity_score=cand.similarity_score,
+                status=cand_status,
+                mentions=[EntityMentionSchema(**m) for m in mentions_data],
+                created_at=cand.created_at,
+                reviewed_at=reviewed_at,
+                review_notes=review_notes,
+            )
+        )
+
+    # Audit log
+    audit_entry = AuditLog(
+        id=str(uuid.uuid4()),
+        case_id=case_id,
+        action="ENTITY_MATCHING_COMPUTED",
+        details=json.dumps({
+            "total_entities_extracted": len(all_entities),
+            "candidate_matches_count": len(response_list),
+        }),
+    )
+    db.add(audit_entry)
+    db.commit()
+
+    return response_list
+
+
+@router.get("/cases/{case_id}/entities", response_model=List[CandidateMatchResponse])
+def get_case_entities(case_id: str, db: Session = Depends(get_db)):
+    """
+    Returns stored candidate entity matches for a case.
+    """
+    records = (
+        db.query(EntityMatchRecord)
+        .filter(EntityMatchRecord.case_id == case_id)
+        .order_by(EntityMatchRecord.created_at.desc())
+        .all()
+    )
+
+    result = []
+    for rec in records:
+        try:
+            mentions_list = json.loads(rec.mentions_json)
+        except Exception:
+            mentions_list = []
+
+        result.append(
+            CandidateMatchResponse(
+                id=rec.id,
+                case_id=rec.case_id,
+                entity_type=rec.entity_type,
+                canonical_name=rec.canonical_name,
+                similarity_score=rec.similarity_score,
+                status=rec.status,
+                mentions=[EntityMentionSchema(**m) for m in mentions_list],
+                created_at=rec.created_at,
+                reviewed_at=rec.reviewed_at,
+                review_notes=rec.review_notes,
+            )
+        )
+    return result
+
+
+@router.post("/entities/matches/{match_id}/review", response_model=CandidateMatchResponse)
+def review_entity_match(
+    match_id: str,
+    payload: ReviewMatchPayload,
+    db: Session = Depends(get_db)
+):
+    """
+    Allows a human investigator to confirm, reject, or mark as separate
+    a candidate entity match, recording a forensic audit log entry.
+    """
+    valid_actions = {"confirm", "reject", "separate", "undo"}
+    if payload.action not in valid_actions:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid action '{payload.action}'. Must be one of: {', '.join(sorted(valid_actions))}"
+        )
+
+    match_rec = db.query(EntityMatchRecord).filter(EntityMatchRecord.id == match_id).first()
+    if not match_rec:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entity match not found.")
+
+    status_map = {
+        "confirm": "confirmed",
+        "reject": "rejected",
+        "separate": "separate",
+        "undo": "pending",
+    }
+    match_rec.status = status_map[payload.action]
+    match_rec.reviewed_at = datetime.utcnow() if payload.action != "undo" else None
+    if payload.review_notes is not None:
+        match_rec.review_notes = payload.review_notes
+
+    # Add audit log
+    audit_entry = AuditLog(
+        id=str(uuid.uuid4()),
+        case_id=match_rec.case_id,
+        action=f"ENTITY_REVIEW_{payload.action.upper()}",
+        details=json.dumps({
+            "match_id": match_id,
+            "canonical_name": match_rec.canonical_name,
+            "entity_type": match_rec.entity_type,
+            "status": match_rec.status,
+            "notes": payload.review_notes,
+        }),
+    )
+    db.add(audit_entry)
+    db.commit()
+    db.refresh(match_rec)
+
+    try:
+        mentions_list = json.loads(match_rec.mentions_json)
+    except Exception:
+        mentions_list = []
+
+    return CandidateMatchResponse(
+        id=match_rec.id,
+        case_id=match_rec.case_id,
+        entity_type=match_rec.entity_type,
+        canonical_name=match_rec.canonical_name,
+        similarity_score=match_rec.similarity_score,
+        status=match_rec.status,
+        mentions=[EntityMentionSchema(**m) for m in mentions_list],
+        created_at=match_rec.created_at,
+        reviewed_at=match_rec.reviewed_at,
+        review_notes=match_rec.review_notes,
+    )
+
 
