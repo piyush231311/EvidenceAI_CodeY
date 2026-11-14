@@ -62,10 +62,14 @@ def init_db():
                     if col_name not in cols_q:
                         conn.execute(text(f"ALTER TABLE clarification_questions ADD COLUMN {col_name} {col_type}"))
 
-                # Auto-migrate evidence table for review and quarantine status
+                # Auto-migrate evidence table
                 res_e = conn.execute(text("PRAGMA table_info(evidence)"))
                 cols_e = [row[1] for row in res_e.fetchall()]
                 e_migrations = [
+                    ("extracted_text", "TEXT"),
+                    ("extraction_confidence", "FLOAT"),
+                    ("extraction_metadata", "TEXT"),
+                    ("processing_time_ms", "FLOAT"),
                     ("review_status", "VARCHAR(32) DEFAULT 'INCLUDED'"),
                     ("quarantine_reason", "TEXT"),
                 ]

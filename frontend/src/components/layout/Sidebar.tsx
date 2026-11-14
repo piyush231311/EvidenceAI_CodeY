@@ -5,7 +5,8 @@ import {
   Upload, 
   Files, 
   Settings as SettingsIcon,
-  Shield
+  Shield,
+  BookOpen
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useApp } from '../../context/AppContext';
@@ -17,6 +18,7 @@ export const Sidebar: React.FC = () => {
     { name: 'Cases', path: '/cases', icon: Folder, count: cases.length },
     { name: 'Add evidence', path: '/upload', icon: Upload },
     { name: 'Evidence', path: '/evidence', icon: Files, count: evidence.length },
+    { name: 'Guide', path: '/guide', icon: BookOpen },
     { name: 'Settings', path: '/settings', icon: SettingsIcon },
   ];
 
@@ -43,7 +45,7 @@ export const Sidebar: React.FC = () => {
                   clsx(
                     'flex items-center justify-between px-3 py-2 rounded text-xs font-medium transition-colors',
                     isActive
-                      ? 'bg-white text-[#1C1917] border border-[#E6E4DF] font-semibold'
+                      ? 'bg-white text-[#1C1917] border border-[#E6E4DF] font-semibold shadow-xs'
                       : 'text-[#6B6862] hover:text-[#1C1917] hover:bg-[#EAE8E1]'
                   )
                 }
