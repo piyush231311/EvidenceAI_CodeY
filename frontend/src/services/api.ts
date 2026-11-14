@@ -6,6 +6,37 @@ export interface ApiCase {
   evidence_count?: number;
 }
 
+export interface ApiAnalysisStage {
+  id: string;
+  job_id: string;
+  stage_name: string;
+  order_index: number;
+  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'WAITING_FOR_USER' | 'SKIPPED';
+  start_time: string | null;
+  completion_time: string | null;
+  duration_ms: number | null;
+  details: Record<string, any>;
+  error_message: string | null;
+}
+
+export interface ApiAnalysisJob {
+  id: string;
+  case_id: string;
+  pipeline_version: string;
+  status: 'PENDING' | 'RUNNING' | 'WAITING_FOR_USER' | 'COMPLETED' | 'FAILED';
+  current_stage: string;
+  progress_percentage: number;
+  completed_stages: string[];
+  failed_stage: string | null;
+  error_details: string | null;
+  start_time: string;
+  completion_time: string | null;
+  artifacts: Record<string, any>;
+  stages?: ApiAnalysisStage[];
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ApiEvidence {
   id: string;
   case_id: string;
@@ -142,6 +173,179 @@ export const api = {
       body: JSON.stringify({ action, review_notes: notes })
     });
     if (!res.ok) throw new Error('Failed to submit review');
+    return res.json();
+  },
+
+  // Event Extraction & Intelligence
+  async extractCaseEvents(caseId: string) {
+    const res = await fetch(`${API_BASE}/cases/${caseId}/events/extract`, {
+      method: 'POST'
+    });
+    if (!res.ok) {
+      let msg = 'Failed to extract events';
+      try {
+        const err = await res.json();
+        if (err.detail) msg = err.detail;
+      } catch (e) {}
+      throw new Error(msg);
+    }
+    return res.json();
+  },
+
+  async getCaseEvents(caseId: string) {
+    const res = await fetch(`${API_BASE}/cases/${caseId}/events`);
+    if (!res.ok) throw new Error('Failed to load case events');
+    return res.json();
+  },
+
+  // Chronological Timeline & Corroboration
+  async getCaseTimeline(caseId: string) {
+    const res = await fetch(`${API_BASE}/cases/${caseId}/timeline`);
+    if (!res.ok) throw new Error('Failed to load case timeline');
+    return res.json();
+  },
+
+  async getCaseContradictions(caseId: string) {
+    const res = await fetch(`${API_BASE}/cases/${caseId}/contradictions`);
+    if (!res.ok) throw new Error('Failed to load contradictions');
+    return res.json();
+  },
+
+  // Clarification Quiz
+  async generateClarificationQuiz(caseId: string) {
+    const res = await fetch(`${API_BASE}/cases/${caseId}/quiz/generate`, {
+      method: 'POST'
+    });
+    if (!res.ok) throw new Error('Failed to generate clarification quiz');
+    return res.json();
+  },
+
+  async getClarificationQuiz(caseId: string) {
+    const res = await fetch(`${API_BASE}/cases/${caseId}/quiz`);
+    if (!res.ok) throw new Error('Failed to load quiz');
+    return res.json();
+  },
+
+  async getCaseUnderstanding(caseId: string) {
+    const res = await fetch(`${API_BASE}/cases/${caseId}/understanding`);
+    if (!res.ok) throw new Error('Failed to load case understanding');
+    return res.json();
+  },
+
+  async submitQuizAnswer(caseId: string, payload: {
+    question_id: string;
+    selected_option: string;
+    free_text_clarification?: string;
+    user_surety: string;
+    knowledge_basis: string;
+  }) {
+    const res = await fetch(`${API_BASE}/cases/${caseId}/quiz/answers`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) throw new Error('Failed to submit answer');
+    return res.json();
+  },
+
+  async triggerReconstruction(caseId: string) {
+    const res = await fetch(`${API_BASE}/cases/${caseId}/reconstruct`, {
+      method: 'POST'
+    });
+    if (!res.ok) throw new Error('Failed to run iterative reconstruction');
+    return res.json();
+  },
+
+  // Forensic Incident Reporting
+  async generateReport(caseId: string) {
+    const res = await fetch(`${API_BASE}/cases/${caseId}/report/generate`, {
+      method: 'POST'
+    });
+    if (!res.ok) throw new Error('Failed to generate incident report');
+    return res.json();
+  },
+
+  async getReport(caseId: string) {
+    const res = await fetch(`${API_BASE}/cases/${caseId}/report`);
+    if (res.status === 404) return null; // Expected when report not yet generated
+    if (!res.ok) throw new Error('Failed to load report');
+    return res.json();
+  },
+
+  getReportHtmlUrl(caseId: string): string {
+    return `${API_BASE}/cases/${caseId}/report/html`;
+  },
+
+  // Streamlined Core MVP Case Analysis
+  async analyzeCase(caseId: string): Promise<ApiAnalysisJob> {
+    const res = await fetch(`${API_BASE}/cases/${caseId}/analyze`, {
+      method: 'POST'
+    });
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody.detail || 'Failed to execute case analysis');
+    }
+    return res.json();
+  },
+
+  async getCaseAnalysis(caseId: string) {
+    const res = await fetch(`${API_BASE}/cases/${caseId}/analysis`);
+    if (res.status === 404) return null; // Expected when case not yet analyzed
+    if (!res.ok) throw new Error('Failed to load case analysis');
+    return res.json();
+  },
+
+  // One-Click Orchestrated Pipeline Job API
+  async getActiveCaseJob(caseId: string): Promise<ApiAnalysisJob | null> {
+    try {
+      const res = await fetch(`${API_BASE}/cases/${caseId}/analysis/active-job`);
+      if (res.status === 404 || !res.ok) return null;
+      const data = await res.json();
+      return (data && data.id && data.current_stage) ? data : null;
+    } catch {
+      return null;
+    }
+  },
+
+  async getAnalysisJob(jobId: string): Promise<ApiAnalysisJob> {
+    const res = await fetch(`${API_BASE}/analysis/jobs/${jobId}`);
+    if (!res.ok) throw new Error('Failed to load analysis job');
+    return res.json();
+  },
+
+  async getAnalysisJobStages(jobId: string): Promise<ApiAnalysisStage[]> {
+    const res = await fetch(`${API_BASE}/analysis/jobs/${jobId}/stages`);
+    if (!res.ok) throw new Error('Failed to load job stages');
+    return res.json();
+  },
+
+  async getAnalysisJobResult(jobId: string): Promise<any> {
+    const res = await fetch(`${API_BASE}/analysis/jobs/${jobId}/result`);
+    if (!res.ok) throw new Error('Failed to load job result');
+    return res.json();
+  },
+
+  async retryAnalysisJob(jobId: string): Promise<ApiAnalysisJob> {
+    const res = await fetch(`${API_BASE}/analysis/jobs/${jobId}/retry`, {
+      method: 'POST'
+    });
+    if (!res.ok) throw new Error('Failed to retry analysis job');
+    return res.json();
+  },
+
+  async getAnalysisJobQuiz(jobId: string): Promise<any[]> {
+    const res = await fetch(`${API_BASE}/analysis/jobs/${jobId}/quiz`);
+    if (!res.ok) throw new Error('Failed to load analysis quiz');
+    return res.json();
+  },
+
+  async submitAnalysisJobQuiz(jobId: string, answers: any[]): Promise<{ status: string; job: ApiAnalysisJob }> {
+    const res = await fetch(`${API_BASE}/analysis/jobs/${jobId}/quiz/submit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ answers })
+    });
+    if (!res.ok) throw new Error('Failed to submit clarification answers');
     return res.json();
   }
 };

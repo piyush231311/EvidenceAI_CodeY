@@ -13,6 +13,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+.pytest_cache/
+.coverage
+*.log
 
 # Build output
 dist/
@@ -50,6 +53,7 @@ checkpoints/
 weights/
 
 # Evidence and test media
+dataset/
 test_evidence/
 test_data/
 evidence_uploads/
