@@ -6,6 +6,7 @@ import tempfile
 import time
 from typing import List, Optional, Any, Dict
 from pathlib import Path
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
@@ -427,3 +428,50 @@ def get_case_audit_logs(case_id: str, db: Session = Depends(get_db)):
 def list_cases(db: Session = Depends(get_db)):
     """List all cases."""
     return db.query(Case).order_by(Case.created_at.desc()).all()
+
+
+class CreateCasePayload(BaseModel):
+    id: Optional[str] = None
+
+
+@router.post("/cases", response_model=CaseResponse, status_code=status.HTTP_201_CREATED)
+def create_case(payload: Optional[CreateCasePayload] = None, db: Session = Depends(get_db)):
+    """Create a new case with an optional specified ID or auto-generated UUID."""
+    case_id = (payload.id.strip() if payload and payload.id else None) or str(uuid.uuid4())
+    existing = db.query(Case).filter(Case.id == case_id).first()
+    if existing:
+        return existing
+    case = Case(id=case_id)
+    db.add(case)
+    db.commit()
+    db.refresh(case)
+    return case
+
+
+@router.delete("/cases/{case_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_case(case_id: str, db: Session = Depends(get_db)):
+    """Delete a case and its associated evidence."""
+    case = db.query(Case).filter(Case.id == case_id).first()
+    if not case:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Case not found.")
+    db.delete(case)
+    db.commit()
+    return None
+
+
+@router.get("/evidence", response_model=List[EvidenceResponse])
+def list_all_evidence(db: Session = Depends(get_db)):
+    """List all evidence across cases."""
+    return db.query(Evidence).order_by(Evidence.uploaded_at.desc()).all()
+
+
+@router.delete("/evidence/{evidence_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_evidence(evidence_id: str, db: Session = Depends(get_db)):
+    """Delete an evidence record."""
+    item = db.query(Evidence).filter(Evidence.id == evidence_id).first()
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Evidence not found.")
+    db.delete(item)
+    db.commit()
+    return None
+
