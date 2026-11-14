@@ -1,19 +1,35 @@
-/* Base Resets */
-:root {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
-  color-scheme: light;
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg-main: #0B1120;
+    --sidebar-bg: #0F172A;
+    --surface-bg: #1E293B;
+  }
+
+  body {
+    @apply bg-[#0B1120] text-slate-100 font-sans antialiased selection:bg-brand-primary/30 selection:text-white;
+    min-height: 100vh;
+  }
 }
 
-body {
-  margin: 0;
-  min-width: 320px;
-  min-height: 100vh;
-  background-color: #f8fafc;
-  color: #0f172a;
+/* Custom Scrollbar for sleek modern look */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
 }
 
-#root {
-  min-height: 100vh;
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #475569;
 }
