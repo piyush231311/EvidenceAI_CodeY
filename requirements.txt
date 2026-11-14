@@ -1,5 +1,24 @@
+# Backend Web Framework
 fastapi>=0.110.0
 uvicorn>=0.28.0
 python-multipart>=0.0.9
 sqlalchemy>=2.0.28
 pydantic>=2.6.4
+
+# Deep Learning Framework & OCR
+paddlepaddle==3.3.1
+paddleocr==3.7.0
+paddlex==3.7.2
+opencv-contrib-python==4.10.0.84
+pillow==13.0.0
+numpy==2.3.5
+
+# Audio Transcription
+faster-whisper==1.2.1
+ctranslate2==4.9.0
+onnxruntime==1.32.0
+av==18.1.0
+
+# Testing & Utilities
+streamlit==1.67.0
+huggingface-hub==2.4.0

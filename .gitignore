@@ -35,3 +35,36 @@ test_files/
 Thumbs.db
 .vscode/
 .idea/
+
+# Virtual environment
+.venv/
+
+# Models and downloaded cache directories
+models_cache/
+.cache/
+.paddlex/
+.paddleocr/
+.huggingface/
+checkpoints/
+weights/
+
+# Evidence and test media
+test_evidence/
+test_data/
+evidence_uploads/
+*.png
+*.jpg
+*.jpeg
+*.mp3
+*.wav
+*.m4a
+*.ogg
+*.flac
+*.mp4
+!frontend/src/assets/*
+!frontend/public/*
+!storage/originals/.gitkeep
+
+# Environment variables
+.env
+.env.local
