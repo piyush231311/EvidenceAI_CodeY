@@ -55,16 +55,24 @@ export interface ApiEvidence {
   uploaded_at: string;
 }
 
-const API_BASE = '/api';
+const API_BASE = (import.meta as any).env?.VITE_API_BASE_URL || '/api';
 
 export async function authFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('evidence_token') : null;
+  const headers = new Headers(init?.headers || {});
+  if (token && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+
   const options: RequestInit = {
     ...init,
+    headers,
     credentials: 'include',
   };
   const res = await fetch(input, options);
   if (res.status === 401) {
     if (typeof window !== 'undefined') {
+      localStorage.removeItem('evidence_token');
       window.dispatchEvent(new CustomEvent('auth:unauthorized'));
     }
   }
@@ -87,11 +95,21 @@ export const api = {
       } catch (e) {}
       throw new Error(msg);
     }
-    return res.json();
+    const data = await res.json();
+    if (data.token && typeof window !== 'undefined') {
+      localStorage.setItem('evidence_token', data.token);
+    }
+    return data;
   },
 
   async logout(): Promise<void> {
-    await authFetch(`${API_BASE}/auth/logout`, { method: 'POST' });
+    try {
+      await authFetch(`${API_BASE}/auth/logout`, { method: 'POST' });
+    } finally {
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('evidence_token');
+      }
+    }
   },
 
   async getCurrentUser(): Promise<{ authenticated: boolean; user: any } | null> {

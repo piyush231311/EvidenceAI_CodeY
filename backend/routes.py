@@ -61,11 +61,14 @@ def login(payload: LoginPayload, response: Response, db: Session = Depends(get_d
         )
 
     session = create_user_session(db, user.id)
+    cookie_secure = os.getenv("COOKIE_SECURE", "0").lower() in ("1", "true", "yes")
+    samesite_val = "none" if cookie_secure else "lax"
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=session.id,
         httponly=True,
-        samesite="lax",
+        secure=cookie_secure,
+        samesite=samesite_val,
         max_age=SESSION_MAX_AGE_SECONDS,
         path="/"
     )
@@ -142,7 +145,7 @@ ALLOWED_TEXT_MIMES = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 }
 
-STORAGE_BASE_DIR = Path("storage") / "originals"
+STORAGE_BASE_DIR = Path(os.getenv("STORAGE_DIR", "storage/originals"))
 
 
 def classify_file(filename: str, content_type: Optional[str]) -> str:
@@ -903,6 +906,147 @@ def review_entity_match(
         reviewed_at=match_rec.reviewed_at,
         review_notes=match_rec.review_notes,
     )
+
+
+# =====================================================================
+# SYSTEM DIAGNOSTICS & RUNTIME STATUS
+# =====================================================================
+
+@router.get("/system/diagnostics")
+@router.get("/system/status")
+def get_system_diagnostics(db: Session = Depends(get_db)):
+    """
+    Comprehensive diagnostic health and capability endpoint.
+    Reports availability of database, storage, Ollama, and AI model adapters
+    WITHOUT loading heavy model weights into memory.
+    """
+    # 1. Environment & Platform
+    env_name = os.getenv("ENV", "development").lower()
+    is_render = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
+    heavy_enabled = os.getenv("ENABLE_HEAVY_INFERENCE", "1").strip().lower() not in ("0", "false", "no", "off")
+
+    # 2. Database connectivity
+    db_status = "connected"
+    db_dialect = db.bind.dialect.name if db.bind else "unknown"
+    try:
+        from sqlalchemy import text
+        db.execute(text("SELECT 1"))
+    except Exception as exc:
+        db_status = f"error: {exc}"
+
+    # 3. Storage availability
+    storage_dir = Path(os.getenv("STORAGE_DIR", "storage/originals"))
+    storage_exists = storage_dir.exists()
+    storage_writable = False
+    if storage_exists:
+        storage_writable = os.access(storage_dir, os.W_OK)
+    else:
+        try:
+            storage_dir.mkdir(parents=True, exist_ok=True)
+            storage_exists = True
+            storage_writable = os.access(storage_dir, os.W_OK)
+        except Exception:
+            storage_writable = False
+
+    # 4. Ollama & LLM / VLM Runtime Check (bounded 2s timeout)
+    from src.intelligence.event_extractor import check_ollama_status
+    ollama_info = check_ollama_status()
+    installed_models = ollama_info.get("models", [])
+    vision_model_name = os.getenv("OLLAMA_VISION_MODEL", "qwen3-vl:4b-instruct")
+    text_model_name = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
+
+    vision_model_present = any(
+        m == vision_model_name or m.startswith(vision_model_name.split(":")[0])
+        for m in installed_models
+    )
+    text_model_present = any(
+        m == text_model_name or m.startswith(text_model_name.split(":")[0])
+        for m in installed_models
+    )
+
+    # 5. Checkpoint files for local ML models (path-check only, NO weight loading)
+    sentry_ckpt = None
+    try:
+        from src.detection.image_authenticity import _find_sentry_checkpoint_path
+        sentry_ckpt = _find_sentry_checkpoint_path()
+    except Exception:
+        pass
+
+    pellav2_ckpt = None
+    try:
+        from src.detection.audio_authenticity import _find_pellav2_checkpoint_path
+        pellav2_ckpt = _find_pellav2_checkpoint_path()
+    except Exception:
+        pass
+
+    # 6. Check singletons in memory without initializing
+    from src.extraction.ocr import _OCR_ENGINE
+    from src.extraction.transcription import _WHISPER_MODEL
+    from src.intelligence.gliner_extractor import GLiNERModelManager
+
+    gliner_loaded = GLiNERModelManager._instance is not None and GLiNERModelManager._instance._model is not None
+
+    return {
+        "service": "Evidence AI Intake API",
+        "status": "healthy" if db_status == "connected" and storage_writable else "degraded",
+        "timestamp": datetime.utcnow().isoformat(),
+        "environment": env_name,
+        "platform": "render" if is_render else "local",
+        "database": {
+            "status": db_status,
+            "dialect": db_dialect,
+        },
+        "storage": {
+            "path": str(storage_dir),
+            "exists": storage_exists,
+            "writable": storage_writable,
+        },
+        "inference": {
+            "heavy_inference_enabled": heavy_enabled,
+            "ollama": {
+                "available": ollama_info.get("available", False),
+                "base_url": ollama_info.get("base_url"),
+                "installed_models_count": len(installed_models),
+                "installed_models": installed_models,
+                "vision_model": {
+                    "configured": vision_model_name,
+                    "available": vision_model_present,
+                },
+                "text_model": {
+                    "configured": text_model_name,
+                    "available": text_model_present,
+                },
+            },
+            "adapters": {
+                "paddleocr": {
+                    "loaded_in_memory": _OCR_ENGINE is not None,
+                    "status": "loaded" if _OCR_ENGINE is not None else ("ready_deferred" if heavy_enabled else "disabled"),
+                },
+                "faster_whisper": {
+                    "loaded_in_memory": _WHISPER_MODEL is not None,
+                    "status": "loaded" if _WHISPER_MODEL is not None else ("ready_deferred" if heavy_enabled else "disabled"),
+                },
+                "sentry_convnext": {
+                    "checkpoint_found": sentry_ckpt is not None,
+                    "checkpoint_path": str(sentry_ckpt) if sentry_ckpt else None,
+                    "status": "ready_deferred" if sentry_ckpt else "checkpoint_missing",
+                },
+                "pellav2_audio": {
+                    "checkpoint_found": pellav2_ckpt is not None,
+                    "checkpoint_path": str(pellav2_ckpt) if pellav2_ckpt else None,
+                    "status": "ready_deferred" if pellav2_ckpt else "checkpoint_missing",
+                },
+                "gliner_ner": {
+                    "loaded_in_memory": gliner_loaded,
+                    "status": "loaded" if gliner_loaded else ("ready_deferred" if heavy_enabled else "regex_fallback"),
+                },
+                "rapidfuzz": {
+                    "available": True,
+                    "status": "active",
+                },
+            },
+        },
+    }
 
 
 # =====================================================================

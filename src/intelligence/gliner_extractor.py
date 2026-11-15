@@ -10,10 +10,14 @@ import threading
 from typing import Any, Dict, List, Optional, Tuple
 from pydantic import BaseModel, Field
 
-# Ensure local cache is used and offline mode enabled for speed & sandbox compatibility
-os.environ.setdefault("HF_HOME", r"c:\project\models_cache\huggingface")
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
-os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+from pathlib import Path
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_DEFAULT_HF_CACHE = str(_PROJECT_ROOT / "models_cache" / "huggingface")
+os.environ.setdefault("HF_HOME", _DEFAULT_HF_CACHE)
+if os.path.exists(_DEFAULT_HF_CACHE):
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 DEFAULT_LABELS = [
     "person",

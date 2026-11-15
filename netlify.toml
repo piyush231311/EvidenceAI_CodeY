@@ -1,0 +1,20 @@
+[build]
+  base = "frontend"
+  publish = "dist"
+  command = "npm run build"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# Optional proxy to Render backend (update with your actual Render service URL)
+# [[redirects]]
+#   from = "/api/*"
+#   to = "https://your-render-service.onrender.com/api/:splat"
+#   status = 200
+#   force = true
+
+# Single Page Application fallback for React Router
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

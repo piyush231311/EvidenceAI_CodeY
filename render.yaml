@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: evidence-ai-api
+    runtime: python
+    plan: free
+    region: oregon
+    buildCommand: pip install -r requirements-render.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: ENV
+        value: production
+      - key: CORS_ORIGINS
+        value: "https://evidence-ai.netlify.app,http://localhost:5173"
+      - key: DATABASE_URL
+        value: sqlite:///./evidence_ai.db
+      - key: STORAGE_DIR
+        value: storage/originals
+      - key: EVIDENCE_AI_ENABLE_VISION
+        value: "0"
+      - key: ENABLE_HEAVY_INFERENCE
+        value: "0"
+      - key: COOKIE_SECURE
+        value: "1"

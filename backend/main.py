@@ -1,7 +1,4 @@
-try:
-    import ctranslate2
-except ImportError:
-    pass
+import os
 from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,16 +13,22 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# CORS configuration for Vite dev server and local clients
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
+# CORS configuration supporting Netlify frontend, Render deployment, and local dev
+raw_origins = os.getenv("CORS_ORIGINS", "").strip()
+if raw_origins:
+    origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
+else:
+    origins = [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-        "*"
-    ],
+    ]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_origin_regex=r"https:\/\/.*\.netlify\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -34,7 +37,8 @@ app.add_middleware(
 # Ensure storage directories exist and initialize database schema
 @app.on_event("startup")
 def on_startup():
-    Path("storage/originals").mkdir(parents=True, exist_ok=True)
+    storage_path = os.getenv("STORAGE_DIR", "storage/originals")
+    Path(storage_path).mkdir(parents=True, exist_ok=True)
     init_db()
 
 
@@ -44,4 +48,8 @@ app.include_router(api_router)
 
 @app.get("/api/health")
 def health_check():
+    """
+    Lightweight, fast liveness probe for Render, load balancers, and container monitors.
+    Returns immediately with zero ML/model overhead.
+    """
     return {"status": "healthy", "service": "Evidence AI Intake API"}
