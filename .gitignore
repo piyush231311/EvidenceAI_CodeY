@@ -1,52 +1,53 @@
-# Dependencies and environments
-node_modules/
-frontend/node_modules/
+# Virtual Environments
 .venv/
 venv/
 env/
 ENV/
-.env
+.env.virtualenv/
 
-# Python build artifacts
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# Python Build & Test Artifacts
 __pycache__/
-*.pyc
 *.py[cod]
 *$py.class
 *.so
 .pytest_cache/
 .coverage
-*.log
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.ruff_cache/
 
-# Build output
-dist/
-frontend/dist/
-.vite/
+# Local Environment & Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.cert
 
-# Database
+# Local SQLite Databases & Journal / WAL / SHM Files
 *.db
+*.db-journal
+*.db-wal
+*.db-shm
 *.sqlite
 *.sqlite3
 
-# Storage (uploaded evidence files must never be committed)
+# Uploaded Evidence, Private Datasets & Temporary Storage
 storage/
 backend/storage/
+!storage/originals/.gitkeep
+dataset/
+test_evidence/
+test_data/
+evidence_uploads/
 
-# Temporary test artifacts
-test_files/
-*.zip
-scratch/
-backups/
-
-# OS and editor files
-.DS_Store
-Thumbs.db
-.vscode/
-.idea/
-
-# Virtual environment
-.venv/
-
-# Models and downloaded cache directories
+# Downloaded AI Model Weights & Cache Directories
 models_cache/
 .cache/
 .paddlex/
@@ -55,14 +56,44 @@ models_cache/
 checkpoints/
 weights/
 
-# Evidence and test media
-dataset/
-test_evidence/
-test_data/
-evidence_uploads/
+# Build & Distribution Outputs
+dist/
+frontend/dist/
+build/
+*.egg-info/
+.vite/
+
+# Generated Reports & Output Artifacts
+reports/
+generated_reports/
+*.report.json
+*.report.html
+
+# Temporary Files, Logs & Scratch Artifacts
+*.log
+logs/
+*.tmp
+temp/
+scratch/
+test_files/
+backups/
+*.zip
+*.tar.gz
+
+# OS and Editor Files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Binary Media Files (Excluding Frontend Assets & Test Fixtures)
 *.png
 *.jpg
 *.jpeg
+*.webp
+*.bmp
 *.mp3
 *.wav
 *.m4a
@@ -73,7 +104,3 @@ evidence_uploads/
 !frontend/public/*
 !storage/originals/.gitkeep
 !tests/data/*
-
-# Environment variables
-.env
-.env.local

@@ -893,8 +893,17 @@ def _execute_job_pipeline(job_id: str, resume_from_stage: Optional[str] = None, 
 
                             context["vision_observations"] = vision_obs_map
                             vram_info = query_gpu_vram_mib()
+                            stage_status = "COMPLETED"
+                            if images_total > 0 and images_failed == images_total:
+                                stage_status = "FAILED"
+                                stage_act = f"Failed ({images_failed}/{images_total} images failed vision analysis)"
+                                err_str = "; ".join(vision_errors[:2]) if vision_errors else "All image analyses failed."
+                            else:
+                                stage_act = f"Completed ({images_completed}/{images_total} images analyzed)"
+                                err_str = None
+
                             _update_stage_db(
-                                job_id, stage_name, "COMPLETED",
+                                job_id, stage_name, stage_status,
                                 {
                                     "vision_enabled": True,
                                     "model_name": DEFAULT_VISION_MODEL,
@@ -905,11 +914,14 @@ def _execute_job_pipeline(job_id: str, resume_from_stage: Optional[str] = None, 
                                     "images_failed": images_failed,
                                     "images_skipped": images_skipped,
                                     "vision_errors": vision_errors,
-                                    "current_model_activity": f"Completed ({images_completed}/{images_total} images analyzed)",
+                                    "current_model_activity": stage_act,
                                     "vram_snapshot": vram_info,
                                 },
+                                error=err_str,
                                 duration_ms=(time.time() - t0) * 1000,
                             )
+                            if stage_status == "FAILED":
+                                return
 
                 # Stage 7: EXTRACT_ENTITIES (GLiNER)
                 # Stage 7: EXTRACT_ENTITIES (GLiNER)

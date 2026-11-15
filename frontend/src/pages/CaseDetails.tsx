@@ -1085,7 +1085,7 @@ export const CaseDetails: React.FC = () => {
                             const isDone = analysisJob.completed_stages?.includes(stageDef.key) || stageRec?.status === 'COMPLETED';
                             const isRunning = analysisJob.current_stage === stageDef.key && analysisJob.status === 'RUNNING';
                             const isWaiting = stageDef.key === 'AWAIT_USER_ANSWERS' && analysisJob.status === 'WAITING_FOR_USER';
-                            const isFailed = analysisJob.failed_stage === stageDef.key;
+                            const isFailed = analysisJob.failed_stage === stageDef.key || stageRec?.status === 'FAILED';
                             const isSkipped = stageRec?.status === 'SKIPPED';
 
                             return (

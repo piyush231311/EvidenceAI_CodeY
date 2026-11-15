@@ -187,7 +187,7 @@ def check_vision_model_available(
             f"{base_url.rstrip('/')}/api/tags",
             headers={"User-Agent": "EvidenceAI-Vision"},
         )
-        with urllib.request.urlopen(req, timeout=1.0) as resp:
+        with urllib.request.urlopen(req, timeout=10.0) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             models = [m.get("name", "") for m in data.get("models", [])]
             matched = next(
